@@ -99,6 +99,32 @@ java WinMergeReportTool.java ^
 `WinMergeU.exe` は `--winmerge` → 環境変数 `WINMERGE_PATH` → システムプロパティ `winmerge.path`
 → 既定のインストール先（`C:\Program Files\WinMerge\` など）の順に探索します。
 
+## JDK を入れたくない場合（ポータブル JDK）
+
+インストーラを使わず、zip を展開するだけで動かせます。レジストリ・システム環境変数・
+システムの PATH は一切変更されず、撤去はフォルダを削除するだけです。
+
+1. [Adoptium](https://adoptium.net/temurin/releases/) で
+   **OS=Windows / Architecture=x64 / Package Type=JDK / 拡張子 .zip** を選んでダウンロード
+   （`.msi` はインストーラなので選ばない）
+2. `C:\tools\jdk` に展開する（`C:\tools\jdk\bin\javac.exe` になるように）
+3. あとは通常どおり `run.bat` / `tools\setup_test_env.bat` を実行するだけ
+
+`tools/find_jdk.bat` が次の順に JDK を探し、見つけた場所をそのバッチの中でだけ使います。
+
+1. PATH 上の `javac`
+2. `%JAVA_HOME%\bin\javac.exe`
+3. リポジトリ直下の `jdk\` フォルダ（`C:\tools\winmergeTools\jdk\`）
+4. `C:\tools\jdk` / `C:\jdk` / `D:\tools\jdk`、および `C:\tools\jdk*`（展開直後の
+   `jdk-21.0.5+11` のようなフォルダ名のままでも拾う）
+
+別の場所に展開した場合は、実行するコマンドプロンプトで指定してください。
+
+```bat
+set "JAVA_HOME=E:\portable\jdk-21"
+C:\tools\winmergeTools\tools\setup_test_env.bat
+```
+
 ## テスト環境の用意（Windows）
 
 WinMerge をインストールした直後の動作確認用に、サンプルデータの生成と疎通確認を行う

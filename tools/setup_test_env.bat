@@ -29,23 +29,21 @@ echo.
 
 rem --- 1. JDK の確認とコンパイル -------------------------------------------
 echo [1/4] JDK を確認してコンパイルします
-where javac >nul 2>&1
-if errorlevel 1 (
-  echo   [ERROR] javac が見つかりません。JDK 11 以降をインストールし、PATH を通してください。
-  exit /b 1
-)
-javac -version
-javac -encoding UTF-8 -d "%CLASSDIR%" "%SRCDIR%\WinMergeReportTool.java" "%TOOLDIR%MakeSampleData.java"
+call "%TOOLDIR%find_jdk.bat"
+if errorlevel 1 exit /b 1
+"%JAVAC%" -version
+"%JAVAC%" -encoding UTF-8 -d "%CLASSDIR%" "%SRCDIR%\WinMergeReportTool.java" "%TOOLDIR%MakeSampleData.java"
 if errorlevel 1 (
   echo   [ERROR] コンパイルに失敗しました。
   exit /b 1
 )
-echo   コンパイル先: %CLASSDIR%
+echo   使用する JDK : %JAVAC%
+echo   コンパイル先 : %CLASSDIR%
 echo.
 
 rem --- 2. サンプルデータの生成 ---------------------------------------------
 echo [2/4] サンプルデータを生成します: %DEST%
-java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -cp "%CLASSDIR%" MakeSampleData --dest "%DEST%" --clean
+"%JAVA%" -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -cp "%CLASSDIR%" MakeSampleData --dest "%DEST%" --clean
 if errorlevel 1 (
   echo   [ERROR] サンプルデータの生成に失敗しました。
   exit /b 1
