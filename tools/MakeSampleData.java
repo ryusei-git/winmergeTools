@@ -9,26 +9,31 @@ import java.util.Comparator;
 import java.util.stream.Stream;
 
 /**
- * WinMergeReportTool の動作確認用サンプルデータを生成する。
+ * Generates the sample tree used to verify WinMergeReportTool on a fresh machine.
  *
- * <p>期待する挙動を一通り踏むように、次のテストケースを作る。
+ * <p>Each test case exercises one behaviour of the tool, so the console summary can be checked
+ * against a known expectation (11 identical / 11 different / 3 one-sided / 1 error):
  * <ul>
- *   <li>TC001_一致          : INPUT/OUTPUT も LOG/LOG_COMPARE も完全一致</li>
- *   <li>TC002_差分あり      : 内容差分あり（UTF-8 / Shift_JIS / 日本語ファイル名を含む）</li>
- *   <li>TC003_片側のみ      : 片方にしか無いファイル、空の LOG_COMPARE</li>
- *   <li>TC004_LOG_COMPAREなし : LOG_COMPARE 自体が無く、エラーとして記録される</li>
- *   <li>nested/TC005_入れ子 : 入れ子のテストケースが検出されるか</li>
+ *   <li>TC001 - both pairs identical; everything should report as identical.</li>
+ *   <li>TC002 - content differences, including a Shift_JIS file, a UTF-8 file with a Japanese
+ *       name, and a file in a subdirectory, to cover encoding and recursion.</li>
+ *   <li>TC003 - a file on one side only, plus an empty LOG_COMPARE directory.</li>
+ *   <li>TC004 - LOG_COMPARE missing entirely; that pair must be recorded as an error.</li>
+ *   <li>nested/TC005 - a test case one level down, to prove nested discovery works.</li>
  * </ul>
  *
- * <p>実行例:
+ * <p>Usage:
  * <pre>
  *   javac -encoding UTF-8 -d %TEMP%\wmrt tools\MakeSampleData.java
  *   java -cp %TEMP%\wmrt MakeSampleData --dest D:\tests\sample --clean
  * </pre>
+ *
+ * <p>Comments are English because the source is UTF-8 and JDK 17 and older default the source
+ * encoding to the platform charset; see WinMergeReportTool for the full rationale.
  */
 public final class MakeSampleData {
 
-    /** テキストファイルは Windows のテストデータらしく CRLF で書き出す。 */
+    /** Sample data is written with CRLF, matching what Windows tools normally produce. */
     private static final String NL = "\r\n";
 
     private static final Charset SJIS = charset("windows-31j");
@@ -69,7 +74,7 @@ public final class MakeSampleData {
         makeOneSided(dest.resolve("TC003_片側のみ"));
         makeMissingPairDir(dest.resolve("TC004_LOG_COMPAREなし"));
         makeIdentical(dest.resolve("nested").resolve("TC005_入れ子"));
-        // 入れ子のケースだけ 1 箇所差分を入れて、検出されたことが分かるようにする
+        // Introduce one difference in the nested case so its detection is visible in the report.
         write(dest.resolve("nested/TC005_入れ子/OUTPUT/data.csv"),
                 csv("3,gamma"), StandardCharsets.UTF_8);
 
@@ -82,7 +87,7 @@ public final class MakeSampleData {
         System.out.println("  nested/TC005_入れ子    入れ子でも検出され、data.csv が差分になるはず");
     }
 
-    /** INPUT/OUTPUT・LOG/LOG_COMPARE がすべて一致するテストケース。 */
+    /** Test case where both pairs match exactly. */
     private static void makeIdentical(Path tc) throws IOException {
         for (String dir : new String[]{"INPUT", "OUTPUT"}) {
             write(tc.resolve(dir).resolve("data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
@@ -93,7 +98,7 @@ public final class MakeSampleData {
         }
     }
 
-    /** 内容に差分があるテストケース。文字コードとファイル名のパターンも混ぜる。 */
+    /** Test case with content differences, mixing encodings and file name shapes. */
     private static void makeDifferent(Path tc) throws IOException {
         write(tc.resolve("INPUT/data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
         write(tc.resolve("OUTPUT/data.csv"), csv("2,BETA"), StandardCharsets.UTF_8);
@@ -103,7 +108,7 @@ public final class MakeSampleData {
         write(tc.resolve("OUTPUT/日本語ファイル名.txt"),
                 "1行目：変更なし" + NL + "2行目：変更後" + NL, StandardCharsets.UTF_8);
 
-        // Shift_JIS のファイル。WinMerge の文字コード自動判別の確認用
+        // Shift_JIS file: checks that WinMerge detects the encoding rather than us.
         write(tc.resolve("INPUT/sjis_log.txt"), log("シフトJISのログです"), SJIS);
         write(tc.resolve("OUTPUT/sjis_log.txt"), log("シフトJISのログです（変更後）"), SJIS);
 
@@ -114,7 +119,7 @@ public final class MakeSampleData {
         write(tc.resolve("LOG_COMPARE/app.log"), log("処理を終了しました（想定値）"), StandardCharsets.UTF_8);
     }
 
-    /** 片方にしか存在しないファイルと、空の LOG_COMPARE を持つテストケース。 */
+    /** Test case with one-sided files and an empty LOG_COMPARE directory. */
     private static void makeOneSided(Path tc) throws IOException {
         write(tc.resolve("INPUT/common.txt"), "両方にあるファイル" + NL, StandardCharsets.UTF_8);
         write(tc.resolve("OUTPUT/common.txt"), "両方にあるファイル" + NL, StandardCharsets.UTF_8);
@@ -122,15 +127,15 @@ public final class MakeSampleData {
         write(tc.resolve("OUTPUT/only_in_output.txt"), "OUTPUT にしかないファイル" + NL, StandardCharsets.UTF_8);
 
         write(tc.resolve("LOG/app.log"), log("処理を終了しました"), StandardCharsets.UTF_8);
-        Files.createDirectories(tc.resolve("LOG_COMPARE")); // 空のまま
+        Files.createDirectories(tc.resolve("LOG_COMPARE")); // intentionally left empty
     }
 
-    /** LOG_COMPARE ディレクトリ自体が無く、エラーとして記録されるテストケース。 */
+    /** Test case missing the LOG_COMPARE directory, which must surface as an error. */
     private static void makeMissingPairDir(Path tc) throws IOException {
         write(tc.resolve("INPUT/data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
         write(tc.resolve("OUTPUT/data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
         write(tc.resolve("LOG/app.log"), log("処理を終了しました"), StandardCharsets.UTF_8);
-        // LOG_COMPARE は作らない
+        // LOG_COMPARE is deliberately not created.
     }
 
     private static String csv(String lastRow) {
