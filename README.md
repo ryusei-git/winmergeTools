@@ -4,6 +4,8 @@ WinMerge を使って、テストケースごとのフォルダ/ファイル比�
 Excel ブックにまとめる単一ファイルの Java ツールです。
 
 - 実装は `WinMergeReportTool.java` の 1 ファイルのみ（外部ライブラリ不要 / JDK 11 以降）
+- `run.bat` … Windows 用の起動バッチ（任意）
+- `tools/` … 動作確認用のサンプルデータ生成と疎通確認スクリプト（任意）
 
 ## 想定するディレクトリ構成
 
@@ -96,6 +98,60 @@ java WinMergeReportTool.java ^
 
 `WinMergeU.exe` は `--winmerge` → 環境変数 `WINMERGE_PATH` → システムプロパティ `winmerge.path`
 → 既定のインストール先（`C:\Program Files\WinMerge\` など）の順に探索します。
+
+## テスト環境の用意（Windows）
+
+WinMerge をインストールした直後の動作確認用に、サンプルデータの生成と疎通確認を行う
+スクリプトを `tools/` に用意しています。
+
+```bat
+cd /d D:\tests
+C:\tools\winmergeTools\tools\setup_test_env.bat
+```
+
+このバッチは次の 4 つを順に実行します。
+
+1. JDK の確認と、`WinMergeReportTool.java` / `MakeSampleData.java` のコンパイル
+2. サンプルデータの生成（`D:\tests\sample`）
+3. `WinMergeU.exe` の場所の特定（`WINMERGE_PATH` → 既定のインストール先）
+4. **WinMerge の疎通確認** — 差分あり／一致のフォルダ比較を実際に実行し、
+   終了コードと HTML レポートの生成を確認する
+
+疎通確認の判定はここが要点です。
+
+| 結果 | 意味 | 対応 |
+| --- | --- | --- |
+| diff=1, same=0 | `/enableexitcode` が有効 | そのまま実行できる |
+| diff=0 | 差分があるのに 0 が返った | WinMerge が `/enableexitcode` 非対応。`--no-exitcode` を付けて実行する |
+| それ以外 | 想定外 | WinMerge のバージョンと `%TEMP%\wm_smoke` のレポートを確認する |
+
+### 生成されるサンプルデータ
+
+`tools/MakeSampleData.java` が、想定する挙動を一通り踏むテストケースを作ります。
+
+| テストケース | 内容 | 期待する結果 |
+| --- | --- | --- |
+| `TC001_一致` | INPUT/OUTPUT・LOG/LOG_COMPARE が完全一致 | すべて「一致」 |
+| `TC002_差分あり` | 内容差分（UTF-8 / Shift_JIS / 日本語ファイル名 / サブフォルダ） | すべて「差分あり」 |
+| `TC003_片側のみ` | 片方にしか無いファイル、空の LOG_COMPARE | 「左のみ」「右のみ」 |
+| `TC004_LOG_COMPAREなし` | LOG_COMPARE ディレクトリ自体が無い | LOG ペアが「エラー」 |
+| `nested/TC005_入れ子` | 入れ子のテストケース | 検出され、`data.csv` が「差分あり」 |
+
+サンプルだけ作り直したい場合:
+
+```bat
+java -cp %TEMP%\wmrt MakeSampleData --dest D:\tests\sample --clean
+```
+
+生成後、比較を実行します。
+
+```bat
+cd /d D:\tests\sample
+C:\tools\winmergeTools\run.bat
+```
+
+`sample\report\index.html` を開き、上の表の「期待する結果」と一致していれば、
+WinMerge との連携は正しく動いています。
 
 ## Excel 出力の 2 モード
 
