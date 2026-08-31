@@ -1,30 +1,38 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem WinMergeReportTool 起動用バッチ（任意・無くても java コマンドだけで実行可能）
+rem Launcher for WinMergeReportTool.
 rem
-rem  - ソースは UTF-8 のため javac -encoding UTF-8 でコンパイルする
-rem    （JDK 17 以前は既定の文字コードが MS932 になり、直接 java Xxx.java すると
-rem      日本語リテラルが壊れるため）
-rem  - コンソールを UTF-8 にして日本語の出力が化けないようにする
-rem  - カレントディレクトリは呼び出し元のまま（＝比較対象のルートになる）
+rem  - The source is UTF-8, so it is compiled with "javac -encoding UTF-8".
+rem    Running "java WinMergeReportTool.java" directly is only safe on JDK 18+,
+rem    because older JDKs default the source encoding to MS932 on Japanese
+rem    Windows and mangle the Japanese string literals.
+rem  - The current directory stays as the caller's, which is what the tool
+rem    compares.
+rem  - Works with an installed JDK or a portable (zip) one; see tools\find_jdk.bat.
+rem    The system PATH is never modified.
+rem  - Console encoding is left alone on purpose: Java writes its output using
+rem    the console's own code page, so Japanese shows correctly as-is.
 rem
-rem 使い方:
+rem Usage:
 rem   cd D:\tests
 rem   C:\tools\winmergeTools\run.bat
 rem   C:\tools\winmergeTools\run.bat --winmerge "C:\Program Files\WinMerge\WinMergeU.exe"
+rem
+rem NOTE: this file must stay ASCII-only (see tools\find_jdk.bat for why).
 rem ---------------------------------------------------------------------------
 setlocal
-chcp 65001 >nul
 
 set "TOOLDIR=%~dp0"
 set "CLASSDIR=%TEMP%\winmergeReportTool"
 
-javac -encoding UTF-8 -d "%CLASSDIR%" "%TOOLDIR%WinMergeReportTool.java"
+call "%TOOLDIR%tools\find_jdk.bat"
+if errorlevel 1 exit /b 1
+
+"%JAVAC%" -encoding UTF-8 -d "%CLASSDIR%" "%TOOLDIR%WinMergeReportTool.java"
 if errorlevel 1 (
-  echo [ERROR] コンパイルに失敗しました。JDK 11 以降がインストールされ、javac に PATH が通っているか確認してください。
+  echo [ERROR] Compilation failed.
   exit /b 1
 )
 
-java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 ^
-     -cp "%CLASSDIR%" WinMergeReportTool %*
+"%JAVA%" -cp "%CLASSDIR%" WinMergeReportTool %*
 exit /b %errorlevel%
