@@ -47,21 +47,27 @@ report/
         └─ files/<相対パス>.html
 ```
 
-## 実行方法
+## 実行方法（Windows）
 
-JDK 11 以降であれば、コンパイル不要で直接実行できます。
+同梱の `run.bat` を使うのが確実です（UTF-8 でコンパイルし、コンソールも UTF-8 にします）。
+カレントディレクトリは呼び出し元のままなので、比較したい場所へ `cd` してから実行してください。
 
 ```bat
 cd D:\tests
-java WinMergeReportTool.java
+C:\tools\winmergeTools\run.bat
 ```
 
-コンパイルして使う場合:
+`java` コマンドだけで実行する場合:
 
 ```bat
-javac -encoding UTF-8 WinMergeReportTool.java
-java WinMergeReportTool
+cd D:\tests
+javac -encoding UTF-8 -d %TEMP%\wmrt C:\tools\winmergeTools\WinMergeReportTool.java
+java -Dfile.encoding=UTF-8 -cp %TEMP%\wmrt WinMergeReportTool
 ```
+
+> **注意**: `java WinMergeReportTool.java`（単一ファイル実行）は **JDK 18 以降** でのみ安全です。
+> JDK 17 以前は日本語 Windows のソース既定文字コードが MS932 になり、UTF-8 のソースに含まれる
+> 日本語リテラルが壊れます。その場合は上記のように `javac -encoding UTF-8` でコンパイルしてください。
 
 ### オプション
 
@@ -76,6 +82,8 @@ java WinMergeReportTool
 | `--timeout <sec>` | WinMerge 1 回あたりのタイムアウト秒（既定: 180） |
 | `--max-rows <n>` | xlsx へ展開する 1 レポートあたりの最大行数（既定: 500） |
 | `--clean` | 実行前に `report` フォルダを削除する |
+| `--no-exitcode` | `/enableexitcode` を使わず、一致判定を Java 側の内容比較で行う |
+| `--max-path <n>` | レポートパスの上限文字数（既定: 240。超える場合は短縮名にする） |
 | `--winmerge-arg <a>` | WinMerge へ渡す追加引数（複数指定可） |
 | `--help` | ヘルプ表示 |
 
@@ -115,9 +123,36 @@ java WinMergeReportTool.java ^
 
 WinMerge 自体の終了コードは `0=一致` / `1=差分あり` / `2 以上=エラー` として解釈しています。
 
-## 補足
+## Windows で実行するときの注意
 
+### 1. `/enableexitcode`（重要）
+
+一致／差分の判定には WinMerge の終了コードを使うため、`/enableexitcode` を必ず付けています。
+**このオプションが無いと WinMerge は常に 0 を返し、全件「一致」と判定されてしまいます。**
+WinMerge 2.16 以降で利用できます。それ以前の版を使う場合は `--no-exitcode` を指定してください
+（レポート生成は WinMerge、一致判定は Java 側のバイト比較で行います。ただし WinMerge の
+比較フィルタや改行コード無視の設定は反映されません）。
+
+### 2. パス長（MAX_PATH 260）
+
+`report/<TC>/<比較名>/files/<相対パス>.html` は元のパスより長くなります。260 文字を超えると
+WinMerge も Java もファイルを作れないため、`--max-path`（既定 240）を超える場合は
+サブフォルダを潰した平坦な名前 → それでも長ければハッシュ付きの短縮名へ自動的に切り替えます。
+出力先自体が深い場合は起動時に警告を出すので、`--report` で浅い場所を指定してください。
+
+### 3. 文字コード
+
+ソースは UTF-8 です。JDK 17 以前で `java WinMergeReportTool.java` を直接実行すると日本語が
+壊れるため、`run.bat` か `javac -encoding UTF-8` を使ってください。
+WinMerge の標準出力は `native.encoding`（日本語 Windows なら windows-31j）で読み取ります。
+
+### 4. その他
+
+- WinMerge を起動したまま実行すると、既存インスタンスへ処理が渡ってレポートが作られない
+  ことがあります。実行前に WinMerge は終了しておいてください。
 - 「選択されたファイルは同一です」のダイアログが出る環境では、一度手動で
   「次回から表示しない」にチェックを入れてください（`/noninteractive` でも抑止されない場合があります）。
+  ダイアログで停止した場合も `--timeout`（既定 180 秒）でプロセスを強制終了し、次の比較へ進みます。
 - レポート形式は `/cfg ReportFiles/ReportType=2`（Simple HTML）を指定しています。
   変更したい場合は `--winmerge-arg` で追加設定を渡せます。
+- Excel の `com` モードは、実行中に Excel が自動操作されます。他の Excel 作業と同時に実行しないでください。

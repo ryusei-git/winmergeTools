@@ -60,6 +60,25 @@ import java.util.zip.ZipOutputStream;
  */
 public final class WinMergeReportTool {
 
+    /**
+     * 外部プロセス（WinMerge / cscript）の出力を読むための文字コード。
+     * JDK 18 以降は file.encoding が UTF-8 固定になるため、OS 本来の文字コード
+     * （日本語 Windows なら windows-31j）を native.encoding から取得する。
+     */
+    private static final Charset NATIVE_CHARSET = nativeCharset();
+
+    private static Charset nativeCharset() {
+        String name = System.getProperty("native.encoding");
+        if (name != null && !name.isEmpty()) {
+            try {
+                return Charset.forName(name);
+            } catch (IllegalCharsetNameException | UnsupportedCharsetException ignore) {
+                // 既定へフォールバックする
+            }
+        }
+        return Charset.defaultCharset();
+    }
+
     private static final DateTimeFormatter TS_HUMAN = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss");
     private static final DateTimeFormatter TS_FILE = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
@@ -91,6 +110,8 @@ public final class WinMergeReportTool {
         String excelMode = "auto";       // auto | com | xlsx | none
         int maxTableRows = 500;          // xlsx へ展開する 1 レポートあたりの最大行数
         boolean cleanReport = false;     // 実行前に report フォルダを削除するか
+        boolean enableExitCode = true;   // /enableexitcode を使うか（WinMerge 2.16 以降）
+        int maxPathLength = 240;         // Windows の MAX_PATH(260) を考慮した上限
     }
 
     // ======================================================================
@@ -183,6 +204,9 @@ public final class WinMergeReportTool {
                 "  --timeout <sec>     WinMerge 1 回あたりのタイムアウト秒（既定: 180）",
                 "  --max-rows <n>      xlsx へ展開する 1 レポートあたりの最大行数（既定: 500）",
                 "  --clean             実行前に report フォルダを削除する",
+                "  --no-exitcode       /enableexitcode を使わず、ファイル内容の一致判定を Java 側で行う",
+                "                      （WinMerge 2.14 以前で /enableexitcode が使えない場合）",
+                "  --max-path <n>      レポートパスの上限文字数（既定: 240、超える場合は短縮名にする）",
                 "  --winmerge-arg <a>  WinMerge へ渡す追加引数（複数指定可）",
                 "  --help              このヘルプ"));
     }
@@ -232,6 +256,12 @@ public final class WinMergeReportTool {
                     break;
                 case "--clean":
                     cfg.cleanReport = true;
+                    break;
+                case "--no-exitcode":
+                    cfg.enableExitCode = false;
+                    break;
+                case "--max-path":
+                    cfg.maxPathLength = (int) parseLong(next(args, ++i, a), a);
                     break;
                 case "--winmerge-arg":
                     cfg.extraArgs.add(next(args, ++i, a));
@@ -301,6 +331,11 @@ public final class WinMergeReportTool {
             deleteRecursively(cfg.reportRoot);
         }
         Files.createDirectories(cfg.reportRoot);
+        if (isWindows() && cfg.reportRoot.toString().length() > 150) {
+            System.err.println("[WARN] レポート出力先のパスが長いため、MAX_PATH(260) を超える恐れがあります: "
+                    + cfg.reportRoot.toString().length() + " 文字");
+            System.err.println("       --report でより浅い場所を指定するか、--max-path で短縮のしきい値を調整してください。");
+        }
 
         // 1) ディレクトリ階層を report 配下へ複製
         int mirrored = mirrorDirectoryTree();
@@ -597,7 +632,10 @@ public final class WinMergeReportTool {
             return r;
         }
 
-        r.report = fileOutDir.resolve(rel + ".html");
+        r.report = shortenIfTooLong(fileOutDir, rel);
+        if (!r.report.equals(fileOutDir.resolve(rel + ".html"))) {
+            r.message = "パスが長いためレポート名を短縮しました";
+        }
         Files.createDirectories(r.report.getParent());
         List<String> cmd = buildWinMergeCommand(false, r.left, r.right, r.report);
         ExecResult ex = exec(cmd);
@@ -605,6 +643,28 @@ public final class WinMergeReportTool {
         System.out.println("     [" + statusMark(r.status) + "] " + pair.label + " " + rel + " -> "
                 + cfg.reportRoot.relativize(r.report));
         return r;
+    }
+
+    /**
+     * Windows の MAX_PATH(260) 制限を避けるため、レポートの出力パスが長すぎる場合に短縮名へ切り替える。
+     * まずサブフォルダを潰した平坦な名前を試し、それでも長い場合はハッシュ付きの短い名前にする。
+     */
+    private Path shortenIfTooLong(Path fileOutDir, String rel) {
+        Path desired = fileOutDir.resolve(rel + ".html");
+        if (desired.toString().length() <= cfg.maxPathLength) {
+            return desired;
+        }
+        Path flat = fileOutDir.resolve(rel.replace('/', '_') + ".html");
+        if (flat.toString().length() <= cfg.maxPathLength) {
+            return flat;
+        }
+        String hash = String.format("%08x", rel.hashCode());
+        String leaf = rel.substring(rel.lastIndexOf('/') + 1);
+        int room = Math.max(0, cfg.maxPathLength - fileOutDir.toString().length() - hash.length() - 8);
+        if (leaf.length() > room) {
+            leaf = leaf.substring(0, room);
+        }
+        return fileOutDir.resolve(leaf + "_" + hash + ".html");
     }
 
     private static String statusMark(Status s) {
@@ -623,18 +683,26 @@ public final class WinMergeReportTool {
             r.message = "タイムアウト（" + cfg.timeoutSec + "秒）";
             return;
         }
-        // WinMerge の終了コード: 0=同一, 1=差分あり, 2=エラー
-        switch (ex.exitCode) {
-            case 0:
-                r.status = Status.SAME;
-                break;
-            case 1:
-                r.status = Status.DIFF;
-                break;
-            default:
-                r.status = Status.ERROR;
-                r.message = "WinMerge 異常終了 (exit=" + ex.exitCode + ") " + ex.output.trim();
-                break;
+        if (cfg.enableExitCode) {
+            // /enableexitcode 指定時の終了コード: 0=同一, 1=差分あり, 2=エラー
+            switch (ex.exitCode) {
+                case 0:
+                    r.status = Status.SAME;
+                    break;
+                case 1:
+                    r.status = Status.DIFF;
+                    break;
+                default:
+                    r.status = Status.ERROR;
+                    r.message = "WinMerge 異常終了 (exit=" + ex.exitCode + ") " + ex.output.trim();
+                    break;
+            }
+        } else if (ex.exitCode != 0) {
+            r.status = Status.ERROR;
+            r.message = "WinMerge 異常終了 (exit=" + ex.exitCode + ") " + ex.output.trim();
+        } else {
+            // 終了コードが使えない版では、内容比較で一致／差分を判定する
+            r.status = contentEquals(r.left, r.right) ? Status.SAME : Status.DIFF;
         }
         if (r.report != null && !Files.isRegularFile(r.report)) {
             if (r.status != Status.ERROR) {
@@ -651,6 +719,9 @@ public final class WinMergeReportTool {
      *   <li>/e  : ESC で終了可能</li>
      *   <li>/u  : 最近使ったファイル一覧に追加しない</li>
      *   <li>/minimize /noninteractive : 最小化で起動しレポート生成後に自動終了</li>
+     *   <li>/enableexitcode : 比較結果を終了コードで返す（0=一致, 1=差分, 2=エラー）。
+     *       <b>これを付けないと WinMerge は常に 0 を返すため、全件「一致」と判定されてしまう。</b>
+     *       WinMerge 2.16 以降で利用可能。古い版では --no-exitcode を指定してファイル内容比較で代替する。</li>
      *   <li>/cfg ReportFiles/ReportType=2 : レポート形式を HTML にする</li>
      *   <li>/or &lt;path&gt; : レポートの出力先</li>
      * </ul>
@@ -667,6 +738,9 @@ public final class WinMergeReportTool {
         cmd.add("/u");
         cmd.add("/minimize");
         cmd.add("/noninteractive");
+        if (cfg.enableExitCode) {
+            cmd.add("/enableexitcode");
+        }
         cmd.add("/cfg");
         cmd.add("ReportFiles/ReportType=2");     // 2 = Simple HTML
         cmd.add("/cfg");
@@ -677,6 +751,43 @@ public final class WinMergeReportTool {
         cmd.add(left.toString());
         cmd.add(right.toString());
         return cmd;
+    }
+
+    /**
+     * ファイル同士／フォルダ同士の内容が一致するかをバイト単位で判定する。
+     * WinMerge の /enableexitcode が使えない場合の代替判定に使う
+     * （WinMerge のフィルタや改行コード設定は反映されない点に注意）。
+     */
+    private static boolean contentEquals(Path left, Path right) {
+        try {
+            if (Files.isDirectory(left) && Files.isDirectory(right)) {
+                Set<String> names = listRelativeFiles(left, right);
+                for (String rel : names) {
+                    if (!contentEquals(left.resolve(rel), right.resolve(rel))) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            if (!Files.isRegularFile(left) || !Files.isRegularFile(right)) {
+                return false;
+            }
+            if (Files.size(left) != Files.size(right)) {
+                return false;
+            }
+            try (InputStream a = new java.io.BufferedInputStream(Files.newInputStream(left));
+                 InputStream b = new java.io.BufferedInputStream(Files.newInputStream(right))) {
+                int x;
+                while ((x = a.read()) >= 0) {
+                    if (x != b.read()) {
+                        return false;
+                    }
+                }
+                return b.read() < 0;
+            }
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** left / right 配下のファイルを再帰的に列挙し、相対パスの和集合をソートして返す。 */
@@ -719,7 +830,7 @@ public final class WinMergeReportTool {
                 byte[] buf = new byte[4096];
                 int n;
                 while ((n = in.read(buf)) > 0) {
-                    sb.append(new String(buf, 0, n, Charset.defaultCharset()));
+                    sb.append(new String(buf, 0, n, NATIVE_CHARSET));
                 }
             } catch (IOException ignore) {
                 // プロセス終了時の読み取り失敗は無視する
