@@ -107,7 +107,10 @@ public final class WinMergeReportTool {
         final List<ComparePair> pairs = new ArrayList<>();
         final List<String> extraArgs = new ArrayList<>();
         long timeoutSec = 180;
-        String excelMode = "auto";       // auto | com | xlsx | none
+        String excelMode = "auto";       // auto | com | xlsx | image | none
+        String browser;                  // HTML を PNG 化するブラウザ（Edge/Chrome）
+        int imageWidth = 1600;           // PNG 化するときの横幅(px)
+        int imageMaxHeight = 16000;      // PNG の高さ上限(px)
         int maxTableRows = 500;          // xlsx へ展開する 1 レポートあたりの最大行数
         boolean cleanReport = false;     // 実行前に report フォルダを削除するか
         boolean enableExitCode = true;   // /enableexitcode を使うか（WinMerge 2.16 以降）
@@ -200,7 +203,11 @@ public final class WinMergeReportTool {
                 "  --winmerge <exe>    WinMergeU.exe のパス（既定: 環境変数 WINMERGE_PATH → 既知の場所を自動探索）",
                 "  --pair <L>:<R>      比較するサブディレクトリの組（複数指定可）",
                 "                      既定: --pair INPUT:OUTPUT --pair LOG:LOG_COMPARE",
-                "  --excel-mode <mode> auto | com | xlsx | none（既定: auto）",
+                "  --excel-mode <mode> auto | com | xlsx | image | none（既定: auto）",
+                "                      image は HTML を PNG 化して Excel に画像として貼り付ける",
+                "  --browser <exe>     PNG 化に使う Edge/Chrome のパス（既定: 自動探索）",
+                "  --image-width <px>  PNG の横幅（既定: 1600）",
+                "  --image-max-height <px> PNG の高さ上限（既定: 16000）",
                 "  --timeout <sec>     WinMerge 1 回あたりのタイムアウト秒（既定: 180）",
                 "  --max-rows <n>      xlsx へ展開する 1 レポートあたりの最大行数（既定: 500）",
                 "  --clean             実行前に report フォルダを削除する",
@@ -244,9 +251,18 @@ public final class WinMergeReportTool {
                 }
                 case "--excel-mode":
                     cfg.excelMode = next(args, ++i, a).toLowerCase(Locale.ROOT);
-                    if (!Arrays.asList("auto", "com", "xlsx", "none").contains(cfg.excelMode)) {
-                        throw new UsageException("--excel-mode は auto|com|xlsx|none のいずれか: " + cfg.excelMode);
+                    if (!Arrays.asList("auto", "com", "xlsx", "image", "none").contains(cfg.excelMode)) {
+                        throw new UsageException("--excel-mode は auto|com|xlsx|image|none のいずれか: " + cfg.excelMode);
                     }
+                    break;
+                case "--browser":
+                    cfg.browser = next(args, ++i, a);
+                    break;
+                case "--image-width":
+                    cfg.imageWidth = (int) parseLong(next(args, ++i, a), a);
+                    break;
+                case "--image-max-height":
+                    cfg.imageMaxHeight = (int) parseLong(next(args, ++i, a), a);
                     break;
                 case "--timeout":
                     cfg.timeoutSec = parseLong(next(args, ++i, a), a);
@@ -914,6 +930,16 @@ public final class WinMergeReportTool {
             return;
         }
 
+        if ("image".equals(cfg.excelMode)) {
+            try {
+                writeXlsxWithImages();
+                System.out.println("[INFO] Excel ブックを作成しました（画像貼り付け）: " + cfg.excelPath);
+            } catch (IOException | InterruptedException e) {
+                System.err.println("[ERROR] 画像貼り付け版の生成に失敗しました: " + e.getMessage());
+            }
+            return;
+        }
+
         boolean comCandidate = "com".equals(cfg.excelMode)
                 || ("auto".equals(cfg.excelMode) && isWindows());
         if (comCandidate) {
@@ -942,6 +968,97 @@ public final class WinMergeReportTool {
 
     private static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    // ----------------------------------------------------------------------
+    // HTML の PNG 化（Edge / Chrome のヘッドレスモード）
+    // ----------------------------------------------------------------------
+
+    /** PNG 化に使うブラウザを探す。Windows なら標準の Edge がそのまま使える。 */
+    private String resolveBrowser() {
+        List<String> candidates = new ArrayList<>();
+        if (cfg.browser != null && !cfg.browser.isEmpty()) {
+            candidates.add(cfg.browser);
+        }
+        String env = System.getenv("BROWSER_PATH");
+        if (env != null && !env.isEmpty()) {
+            candidates.add(env);
+        }
+        String pf = System.getenv("ProgramFiles");
+        String pf86 = System.getenv("ProgramFiles(x86)");
+        String local = System.getenv("LOCALAPPDATA");
+        for (String root : new String[]{pf86, pf, local}) {
+            if (root == null) {
+                continue;
+            }
+            candidates.add(root + "\\Microsoft\\Edge\\Application\\msedge.exe");
+            candidates.add(root + "\\Google\\Chrome\\Application\\chrome.exe");
+        }
+        // Windows 以外での動作確認用
+        candidates.add("/opt/pw-browsers/chromium/chrome-linux/chrome");
+        candidates.add("/usr/bin/chromium");
+        candidates.add("/usr/bin/google-chrome");
+        for (String c : candidates) {
+            if (Files.isRegularFile(Paths.get(c))) {
+                return Paths.get(c).toAbsolutePath().toString();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * HTML をヘッドレスブラウザで PNG 化する。
+     *
+     * <p>ヘッドレス撮影はウィンドウの高さ分しか写らないため、レポートの行数から
+     * 必要な高さを見積もってウィンドウサイズに渡す。見積もりが外れても
+     * 上端から欠けることはなく、余白が増えるか下端が切れるだけになる。
+     */
+    private boolean renderHtmlToPng(String browser, Path html, Path png) throws IOException, InterruptedException {
+        int rows = extractHtmlRows(html, cfg.imageMaxHeight / 18).size();
+        // 折り返しのある行を考慮して 1 行 24px でやや多めに見積もる
+        int height = Math.max(200, Math.min(cfg.imageMaxHeight, 200 + rows * 24));
+        // ブラウザのプロファイルはレポートに混ざらないよう一時ディレクトリへ置く
+        Path profile = Paths.get(System.getProperty("java.io.tmpdir"), "winmerge_report_browser");
+        Files.createDirectories(png.getParent());
+
+        List<String> cmd = new ArrayList<>(List.of(
+                browser,
+                "--headless=new",
+                "--disable-gpu",
+                "--hide-scrollbars",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--default-background-color=FFFFFFFF",
+                "--virtual-time-budget=3000",
+                "--user-data-dir=" + profile,
+                "--window-size=" + cfg.imageWidth + "," + height,
+                "--screenshot=" + png,
+                html.toUri().toString()));
+        if (!isWindows()) {
+            cmd.add(3, "--no-sandbox");
+        }
+        ExecResult ex = exec(cmd);
+        if (!Files.isRegularFile(png) || Files.size(png) == 0) {
+            System.err.println("[WARN] PNG 化に失敗しました: " + html.getFileName()
+                    + " (exit=" + ex.exitCode + ") " + ex.output.trim());
+            return false;
+        }
+        return true;
+    }
+
+    /** PNG の IHDR から幅と高さを読む。読めない場合は null。 */
+    private static int[] pngSize(Path png) {
+        try {
+            byte[] b = Files.readAllBytes(png);
+            if (b.length < 24 || (b[0] & 0xFF) != 0x89 || b[1] != 'P' || b[2] != 'N' || b[3] != 'G') {
+                return null;
+            }
+            int w = ((b[16] & 0xFF) << 24) | ((b[17] & 0xFF) << 16) | ((b[18] & 0xFF) << 8) | (b[19] & 0xFF);
+            int h = ((b[20] & 0xFF) << 24) | ((b[21] & 0xFF) << 16) | ((b[22] & 0xFF) << 8) | (b[23] & 0xFF);
+            return (w > 0 && h > 0) ? new int[]{w, h} : null;
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -1205,9 +1322,25 @@ public final class WinMergeReportTool {
         }
     }
 
+    /** シートに貼り付ける画像（1 セルアンカー）。 */
+    static final class ImageRef {
+        final Path png;
+        final int anchorRow;   // 0 始まりの行番号
+        final int widthPx;
+        final int heightPx;
+
+        ImageRef(Path png, int anchorRow, int widthPx, int heightPx) {
+            this.png = png;
+            this.anchorRow = anchorRow;
+            this.widthPx = widthPx;
+            this.heightPx = heightPx;
+        }
+    }
+
     static final class SheetData {
         final String name;
         final List<List<Cell>> rows = new ArrayList<>();
+        final List<ImageRef> images = new ArrayList<>();
         double[] colWidths = {40, 18, 18, 18, 18, 18, 18, 18};
 
         SheetData(String name) {
@@ -1225,6 +1358,99 @@ public final class WinMergeReportTool {
         void blank() {
             rows.add(List.of());
         }
+    }
+
+    /**
+     * HTML レポートを PNG 化し、画像としてシートへ貼り付けた xlsx を作る。
+     * Excel のインストールは不要（画像パーツを直接書き込む）。
+     */
+    private void writeXlsxWithImages() throws IOException, InterruptedException {
+        String browser = resolveBrowser();
+        if (browser == null) {
+            System.err.println("[WARN] PNG 化に使えるブラウザ（Edge / Chrome）が見つかりません。");
+            System.err.println("       --browser で msedge.exe のパスを指定してください。テキスト展開版を生成します。");
+            writeXlsx();
+            return;
+        }
+        System.out.println("[INFO] PNG 化に使用するブラウザ: " + browser);
+
+        Path imageDir = cfg.reportRoot.resolve("_images");
+        List<SheetData> sheets = new ArrayList<>();
+        Set<String> usedNames = new LinkedHashSet<>();
+        sheets.add(buildSummarySheet(usedNames));
+
+        int done = 0;
+        int failed = 0;
+        for (TestCase tc : testCases) {
+            SheetData sd = new SheetData(uniqueSheetName(tc.name, usedNames));
+            sd.colWidths = new double[]{60, 18, 18, 18, 18, 18, 18, 18};
+            sd.addText("テストケース: " + tc.name, ST_TITLE);
+            sd.addText("パス: " + tc.dir, ST_NORMAL);
+            sd.blank();
+
+            for (CompareResult r : tc.results) {
+                sd.addText("[" + r.pairLabel + "] " + r.kind + " : " + r.name
+                        + "  => " + r.status.label + (r.message.isEmpty() ? "" : " (" + r.message + ")"), ST_BOLD);
+                if (r.report == null) {
+                    sd.blank();
+                    continue;
+                }
+                String rel = cfg.reportRoot.relativize(r.report).toString().replace('\\', '/');
+                sd.add(new Cell("レポートを開く: " + rel, ST_LINK, hyperlinkTarget(r.report)));
+
+                Path png = imageDir.resolve(rel + ".png");
+                if (renderHtmlToPng(browser, r.report, png)) {
+                    int[] size = pngSize(png);
+                    int w = size == null ? cfg.imageWidth : size[0];
+                    int h = size == null ? 600 : size[1];
+                    sd.images.add(new ImageRef(png, sd.rows.size(), w, h));
+                    // 画像の高さ分だけ行を送り、次の見出しと重ならないようにする
+                    int rowsNeeded = (int) Math.ceil(h / 20.0);
+                    for (int i = 0; i < rowsNeeded; i++) {
+                        sd.blank();
+                    }
+                    done++;
+                } else {
+                    sd.addText("（PNG 化に失敗しました。上のリンクから HTML を参照してください）", ST_NORMAL);
+                    failed++;
+                }
+                sd.blank();
+            }
+            sheets.add(sd);
+            System.out.println("     画像化: " + tc.name + " 完了");
+        }
+
+        writeXlsxFile(cfg.excelPath, sheets);
+        System.out.println("[INFO] 画像 " + done + " 枚を貼り付けました"
+                + (failed > 0 ? "（失敗 " + failed + " 枚）" : "") + " / 画像の保存先: " + imageDir);
+    }
+
+    /** サマリシートは画像版・テキスト版で共通。 */
+    private SheetData buildSummarySheet(Set<String> usedNames) {
+        SheetData summary = new SheetData(uniqueSheetName("サマリ", usedNames));
+        summary.colWidths = new double[]{24, 22, 14, 44, 12, 40, 40};
+        summary.addText("WinMerge 比較レポート サマリ", ST_TITLE);
+        summary.addText("生成日時: " + LocalDateTime.now().format(TS_HUMAN), ST_NORMAL);
+        summary.addText("対象ルート: " + cfg.root, ST_NORMAL);
+        summary.blank();
+        summary.add(header("テストケース"), header("比較"), header("種別"), header("対象"),
+                header("結果"), header("備考"), header("レポート"));
+        for (TestCase tc : testCases) {
+            for (CompareResult r : tc.results) {
+                summary.add(
+                        new Cell(tc.name, ST_CELL, null),
+                        new Cell(r.pairLabel, ST_CELL, null),
+                        new Cell(r.kind, ST_CELL, null),
+                        new Cell(r.name, ST_CELL, null),
+                        new Cell(r.status.label, ST_CELL, null),
+                        new Cell(r.message, ST_CELL, null),
+                        r.report == null
+                                ? new Cell("-", ST_CELL, null)
+                                : new Cell(cfg.reportRoot.relativize(r.report).toString().replace('\\', '/'),
+                                        ST_LINK, hyperlinkTarget(r.report)));
+            }
+        }
+        return summary;
     }
 
     private void writeXlsx() throws IOException {
@@ -1316,10 +1542,15 @@ public final class WinMergeReportTool {
               .append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>")
               .append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>")
               .append("<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>")
+              .append("<Default Extension=\"png\" ContentType=\"image/png\"/>")
               .append("<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>");
             for (int i = 1; i <= sheets.size(); i++) {
                 ct.append("<Override PartName=\"/xl/worksheets/sheet").append(i)
                   .append(".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>");
+                if (!sheets.get(i - 1).images.isEmpty()) {
+                    ct.append("<Override PartName=\"/xl/drawings/drawing").append(i)
+                      .append(".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>");
+                }
             }
             ct.append("</Types>");
             put(zip, "[Content_Types].xml", ct.toString());
@@ -1358,11 +1589,14 @@ public final class WinMergeReportTool {
 
             put(zip, "xl/styles.xml", stylesXml());
 
+            int mediaSeq = 0;
             for (int i = 0; i < sheets.size(); i++) {
                 SheetData sd = sheets.get(i);
+                int sheetNo = i + 1;
                 List<String> links = new ArrayList<>();
-                put(zip, "xl/worksheets/sheet" + (i + 1) + ".xml", sheetXml(sd, links));
-                if (!links.isEmpty()) {
+                put(zip, "xl/worksheets/sheet" + sheetNo + ".xml", sheetXml(sd, links));
+
+                if (!links.isEmpty() || !sd.images.isEmpty()) {
                     StringBuilder sr = new StringBuilder();
                     sr.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
                       .append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
@@ -1371,11 +1605,70 @@ public final class WinMergeReportTool {
                           .append("\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"")
                           .append(esc(links.get(k))).append("\" TargetMode=\"External\"/>");
                     }
+                    if (!sd.images.isEmpty()) {
+                        // 図面へのリレーションはハイパーリンクの後ろに割り当てる（sheetXml と同じ採番）
+                        sr.append("<Relationship Id=\"rId").append(links.size() + 1)
+                          .append("\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" Target=\"../drawings/drawing")
+                          .append(sheetNo).append(".xml\"/>");
+                    }
                     sr.append("</Relationships>");
-                    put(zip, "xl/worksheets/_rels/sheet" + (i + 1) + ".xml.rels", sr.toString());
+                    put(zip, "xl/worksheets/_rels/sheet" + sheetNo + ".xml.rels", sr.toString());
+                }
+
+                if (!sd.images.isEmpty()) {
+                    StringBuilder dr = new StringBuilder();
+                    dr.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
+                      .append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+                    List<String> mediaNames = new ArrayList<>();
+                    for (int k = 0; k < sd.images.size(); k++) {
+                        String media = "image" + (++mediaSeq) + ".png";
+                        mediaNames.add(media);
+                        putBinary(zip, "xl/media/" + media, Files.readAllBytes(sd.images.get(k).png));
+                        dr.append("<Relationship Id=\"rId").append(k + 1)
+                          .append("\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/")
+                          .append(media).append("\"/>");
+                    }
+                    dr.append("</Relationships>");
+                    put(zip, "xl/drawings/_rels/drawing" + sheetNo + ".xml.rels", dr.toString());
+                    put(zip, "xl/drawings/drawing" + sheetNo + ".xml", drawingXml(sd.images));
                 }
             }
         }
+    }
+
+    /** EMU（English Metric Unit）換算。1px = 9525EMU。 */
+    private static final int EMU_PER_PX = 9525;
+
+    private static String drawingXml(List<ImageRef> images) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
+          .append("<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" ")
+          .append("xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">");
+        for (int k = 0; k < images.size(); k++) {
+            ImageRef img = images.get(k);
+            long cx = (long) img.widthPx * EMU_PER_PX;
+            long cy = (long) img.heightPx * EMU_PER_PX;
+            sb.append("<xdr:oneCellAnchor>")
+              .append("<xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>")
+              .append(img.anchorRow).append("</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>")
+              .append("<xdr:ext cx=\"").append(cx).append("\" cy=\"").append(cy).append("\"/>")
+              .append("<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"").append(k + 1)
+              .append("\" name=\"Report ").append(k + 1).append("\"/><xdr:cNvPicPr/></xdr:nvPicPr>")
+              .append("<xdr:blipFill><a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:embed=\"rId")
+              .append(k + 1).append("\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>")
+              .append("<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"").append(cx)
+              .append("\" cy=\"").append(cy).append("\"/></a:xfrm>")
+              .append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr>")
+              .append("</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>");
+        }
+        sb.append("</xdr:wsDr>");
+        return sb.toString();
+    }
+
+    private static void putBinary(ZipOutputStream zip, String name, byte[] content) throws IOException {
+        zip.putNextEntry(new ZipEntry(name));
+        zip.write(content);
+        zip.closeEntry();
     }
 
     private static void put(ZipOutputStream zip, String name, String content) throws IOException {
@@ -1464,6 +1757,10 @@ public final class WinMergeReportTool {
         sb.append("</sheetData>");
         if (hyper.length() > 0) {
             sb.append("<hyperlinks>").append(hyper).append("</hyperlinks>");
+        }
+        if (!sd.images.isEmpty()) {
+            // 図面のリレーション ID はハイパーリンクの次の番号（sheet の rels と対応させる）
+            sb.append("<drawing r:id=\"rId").append(outLinks.size() + 1).append("\"/>");
         }
         sb.append("</worksheet>");
         return sb.toString();

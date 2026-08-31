@@ -41,6 +41,7 @@ report/
 ├─ comparison_report_<日時>.xlsx                ← Excel
 ├─ _build_excel.vbs                             ← COM 貼り付け用スクリプト（com モード時）
 ├─ _build_excel.log                             ← COM 実行時の診断ログ（com モード時）
+├─ _images/                                     ← PNG 化したレポート（image モード時）
 └─ TC001/
     ├─ INPUT_vs_OUTPUT/
     │   ├─ _folder_compare.html                 ← フォルダ比較結果
@@ -81,7 +82,10 @@ java -Dfile.encoding=UTF-8 -cp %TEMP%\wmrt WinMergeReportTool
 | `--excel <file>` | Excel 出力先（既定: `<report>/comparison_report_<日時>.xlsx`） |
 | `--winmerge <exe>` | `WinMergeU.exe` のパス |
 | `--pair <L>:<R>` | 比較するサブディレクトリの組（複数指定可） |
-| `--excel-mode <mode>` | `auto` / `com` / `xlsx` / `none`（既定: `auto`） |
+| `--excel-mode <mode>` | `auto` / `com` / `image` / `xlsx` / `none`（既定: `auto`） |
+| `--browser <exe>` | PNG 化に使う Edge/Chrome のパス（既定: 自動探索） |
+| `--image-width <px>` | PNG の横幅（既定: 1600） |
+| `--image-max-height <px>` | PNG の高さ上限（既定: 16000） |
 | `--timeout <sec>` | WinMerge 1 回あたりのタイムアウト秒（既定: 180） |
 | `--max-rows <n>` | xlsx へ展開する 1 レポートあたりの最大行数（既定: 500） |
 | `--clean` | 実行前に `report` フォルダを削除する |
@@ -180,12 +184,26 @@ C:\tools\winmergeTools\run.bat
 `sample\report\index.html` を開き、上の表の「期待する結果」と一致していれば、
 WinMerge との連携は正しく動いています。
 
-## Excel 出力の 2 モード
+## Excel 出力の 3 モード
 
 | モード | 内容 | 前提 |
 | --- | --- | --- |
 | `com` | VBScript 経由で Excel を操作し、HTML レポートを**そのままシートへ貼り付け**（書式・色を保持） | Windows + Excel + `cscript` |
+| `image` | HTML を**ヘッドレスブラウザで PNG 化して画像として貼り付け**。見た目が完全に再現される | Edge か Chrome（Windows 標準の Edge で可） |
 | `xlsx` | 外部ライブラリなしで `.xlsx` を直接生成。HTML の表を解析してセルに展開し、元 HTML へのハイパーリンクを付与 | なし |
+
+`image` は Excel が無くても動きます（画像パーツを xlsx へ直接書き込むため）。
+
+```bat
+C:\tools\winmergeTools\run.bat --excel-mode image
+```
+
+- PNG は `report\_images\<レポートと同じ階層>.png` にも残るので、単体でも参照できます
+- 画像の横幅は `--image-width`（既定 1600）、高さ上限は `--image-max-height`（既定 16000）
+- 高さはレポートの行数から見積もります。極端に長いレポートでは下端が切れることがあるので、
+  その場合は各シートのリンクから元の HTML を参照してください
+- 画像なのでセル内の文字は検索・コピーできません。検索性が要るなら `xlsx` モードを使ってください
+- ブラウザは Edge → Chrome の順に自動探索します。見つからない場合は `--browser` で指定してください
 
 既定の `auto` は Windows なら `com` を試し、失敗した場合に `xlsx` へフォールバックします。
 フォールバックした場合は理由を `[WARN]` として表示し、`report\_build_excel.vbs`（実行した
