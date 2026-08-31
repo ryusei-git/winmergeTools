@@ -41,8 +41,24 @@ for %%D in ("%~dp0..\jdk" "%~dp0jdk" "C:\tools\jdk" "C:\jdk" "D:\tools\jdk") do 
   )
 )
 
+rem Common installation folders, in case a JDK is installed but not on PATH
+set "PF=%ProgramFiles%"
+set "PF86=%ProgramFiles(x86)%"
+
 rem Also accept the extraction folder name as-is, e.g. jdk-21.0.5+11
-for /d %%D in ("%~dp0..\jdk*" "C:\tools\jdk*" "C:\jdk*" "D:\tools\jdk*") do (
+for /d %%D in (
+  "%~dp0..\jdk*"
+  "C:\tools\jdk*"
+  "C:\jdk*"
+  "D:\tools\jdk*"
+  "%PF%\Java\jdk*"
+  "%PF%\Eclipse Adoptium\jdk*"
+  "%PF%\Microsoft\jdk*"
+  "%PF%\Amazon Corretto\jdk*"
+  "%PF%\Zulu\zulu*"
+  "%PF86%\Java\jdk*"
+  "%LOCALAPPDATA%\Programs\Eclipse Adoptium\jdk*"
+) do (
   if exist "%%~fD\bin\javac.exe" (
     set "JAVAC=%%~fD\bin\javac.exe"
     set "JAVA=%%~fD\bin\java.exe"
