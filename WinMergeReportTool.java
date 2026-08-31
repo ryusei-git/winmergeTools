@@ -923,7 +923,7 @@ public final class WinMergeReportTool {
                     return;
                 }
             } catch (Exception e) {
-                System.err.println("[WARN] Excel COM 自動化に失敗しました: " + e.getMessage());
+                System.err.println("[WARN] Excel COM 自動化を実行できませんでした: " + e);
             }
             if ("com".equals(cfg.excelMode)) {
                 System.err.println("[ERROR] Excel COM 出力に失敗しました。--excel-mode xlsx を試してください。");
@@ -950,7 +950,10 @@ public final class WinMergeReportTool {
 
     private boolean writeExcelViaCom() throws IOException, InterruptedException {
         Path vbs = cfg.reportRoot.resolve("_build_excel.vbs");
-        Files.writeString(vbs, buildVbScript(), StandardCharsets.UTF_16LE);
+        Path log = cfg.reportRoot.resolve("_build_excel.log");
+        Files.deleteIfExists(log);
+
+        Files.writeString(vbs, buildVbScript(log), StandardCharsets.UTF_16LE);
         // UTF-16LE の BOM を付与（cscript が Unicode スクリプトとして解釈できるようにする）
         byte[] body = Files.readAllBytes(vbs);
         byte[] withBom = new byte[body.length + 2];
@@ -960,31 +963,78 @@ public final class WinMergeReportTool {
         Files.write(vbs, withBom);
 
         ExecResult ex = exec(List.of("cscript", "//nologo", "//B", vbs.toString()));
-        if (ex.timedOut || ex.exitCode != 0) {
-            System.err.println("[WARN] cscript 実行結果: exit=" + ex.exitCode + " " + ex.output.trim());
-            return false;
+        boolean created = Files.isRegularFile(cfg.excelPath);
+        if (created && !ex.timedOut && ex.exitCode == 0) {
+            if (!ex.output.isBlank()) {
+                System.err.println("[WARN] Excel COM の警告: " + ex.output.trim());
+            }
+            return true;
         }
-        return Files.isRegularFile(cfg.excelPath);
+
+        // 失敗時は理由を必ず出す。VBScript は Sub を抜けると Err がリセットされるため、
+        // 例外を握り潰さないようスクリプト側で収集した内容をここへ流す。
+        System.err.println("[WARN] Excel COM 自動化に失敗しました"
+                + (ex.timedOut ? "（タイムアウト）" : "（cscript exit=" + ex.exitCode + "）")
+                + (created ? "" : " / ブック未生成"));
+        if (!ex.output.isBlank()) {
+            for (String line : ex.output.trim().split("\\R")) {
+                System.err.println("       " + line);
+            }
+        }
+        System.err.println("       スクリプト: " + vbs);
+        if (Files.isRegularFile(log)) {
+            System.err.println("       ログ      : " + log);
+        }
+        return false;
     }
 
-    private String buildVbScript() {
+    /**
+     * Excel を COM 自動化するための VBScript を組み立てる。
+     *
+     * <p>エラー処理の注意: VBScript では Sub を抜けた時点で Err がリセットされるため、
+     * スクリプト末尾で Err.Number を見るだけでは Sub の中で起きた失敗を検出できない。
+     * そのため各操作の直後に Report で内容を退避し、最後はブックが実際に保存されたか
+     * どうかで成否を判定する。診断内容は標準エラーとログファイルの両方へ出す。
+     */
+    private String buildVbScript(Path logFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("Option Explicit\r\n")
-          .append("Dim xl, wb, ws, fso, gRow, gFirst\r\n")
+          .append("Dim xl, wb, ws, fso, gRow, gFirst, gErrors, gOut, gLog\r\n")
+          .append("gErrors = \"\"\r\n")
+          .append("gFirst = True\r\n")
+          .append("gRow = 1\r\n")
+          .append("gOut = ").append(vbsStr(cfg.excelPath.toString())).append("\r\n")
+          .append("gLog = ").append(vbsStr(logFile.toString())).append("\r\n")
           .append("Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n")
+          .append("\r\n")
+          .append("On Error Resume Next\r\n")
           .append("Set xl = CreateObject(\"Excel.Application\")\r\n")
+          .append("If Err.Number <> 0 Then\r\n")
+          .append("  WScript.StdErr.WriteLine \"Excel を起動できません (Excel 未インストールの可能性): \" ")
+          .append("& Err.Number & \" \" & Err.Description\r\n")
+          .append("  WScript.Quit 2\r\n")
+          .append("End If\r\n")
+          .append("On Error GoTo 0\r\n")
+          .append("\r\n")
           .append("xl.Visible = False\r\n")
           .append("xl.DisplayAlerts = False\r\n")
           .append("Set wb = xl.Workbooks.Add\r\n")
+          .append("On Error Resume Next\r\n")
           .append("Do While wb.Worksheets.Count > 1\r\n")
           .append("  wb.Worksheets(wb.Worksheets.Count).Delete\r\n")
           .append("Loop\r\n")
-          .append("gFirst = True\r\n")
-          .append("gRow = 1\r\n");
+          .append("Report \"初期化\"\r\n");
 
         // --- サブルーチン定義 ---
         sb.append("\r\n")
+          .append("Sub Report(where)\r\n")
+          .append("  If Err.Number <> 0 Then\r\n")
+          .append("    gErrors = gErrors & where & \" : \" & Err.Number & \" \" & Err.Description & vbCrLf\r\n")
+          .append("    Err.Clear\r\n")
+          .append("  End If\r\n")
+          .append("End Sub\r\n\r\n")
           .append("Sub AddSheet(sname)\r\n")
+          .append("  On Error Resume Next\r\n")
           .append("  If gFirst Then\r\n")
           .append("    Set ws = wb.Worksheets(1)\r\n")
           .append("    gFirst = False\r\n")
@@ -992,54 +1042,57 @@ public final class WinMergeReportTool {
           .append("    wb.Worksheets.Add , wb.Worksheets(wb.Worksheets.Count)\r\n")
           .append("    Set ws = wb.Worksheets(wb.Worksheets.Count)\r\n")
           .append("  End If\r\n")
+          .append("  Report \"シート追加 \" & sname\r\n")
           .append("  ws.Name = sname\r\n")
+          .append("  Report \"シート名設定 \" & sname\r\n")
           .append("  gRow = 1\r\n")
           .append("End Sub\r\n\r\n")
           .append("Sub AddLine(txt, isBold)\r\n")
+          .append("  On Error Resume Next\r\n")
           .append("  ws.Cells(gRow, 1).Value = txt\r\n")
           .append("  ws.Cells(gRow, 1).Font.Bold = isBold\r\n")
+          .append("  Report \"行の書き込み\"\r\n")
           .append("  gRow = gRow + 1\r\n")
           .append("End Sub\r\n\r\n")
           .append("Sub AddRow4(c1, c2, c3, c4)\r\n")
+          .append("  On Error Resume Next\r\n")
           .append("  ws.Cells(gRow, 1).Value = c1\r\n")
           .append("  ws.Cells(gRow, 2).Value = c2\r\n")
           .append("  ws.Cells(gRow, 3).Value = c3\r\n")
           .append("  ws.Cells(gRow, 4).Value = c4\r\n")
+          .append("  Report \"行の書き込み\"\r\n")
           .append("  gRow = gRow + 1\r\n")
           .append("End Sub\r\n\r\n")
           .append("Sub AddReport(title, htmlPath)\r\n")
-          .append("  Dim src, rows\r\n")
+          .append("  Dim src, used\r\n")
+          .append("  On Error Resume Next\r\n")
           .append("  AddLine title, True\r\n")
           .append("  If Not fso.FileExists(htmlPath) Then\r\n")
           .append("    AddLine \"  レポートがありません: \" & htmlPath, False\r\n")
           .append("    gRow = gRow + 1\r\n")
           .append("    Exit Sub\r\n")
           .append("  End If\r\n")
-          .append("  ws.Hyperlinks.Add ws.Cells(gRow, 1), htmlPath, \"\", htmlPath, htmlPath\r\n")
+          .append("  ws.Hyperlinks.Add ws.Cells(gRow, 1), htmlPath, , , htmlPath\r\n")
+          .append("  Report \"リンク追加 \" & htmlPath\r\n")
           .append("  gRow = gRow + 1\r\n")
-          .append("  On Error Resume Next\r\n")
           .append("  Set src = xl.Workbooks.Open(htmlPath, False, True)\r\n")
           .append("  If Err.Number <> 0 Then\r\n")
-          .append("    Err.Clear\r\n")
-          .append("    On Error GoTo 0\r\n")
+          .append("    Report \"HTML を開けません \" & htmlPath\r\n")
           .append("    AddLine \"  HTML の取り込みに失敗しました\", False\r\n")
           .append("    gRow = gRow + 1\r\n")
           .append("    Exit Sub\r\n")
           .append("  End If\r\n")
-          .append("  rows = src.Worksheets(1).UsedRange.Rows.Count\r\n")
-          .append("  src.Worksheets(1).UsedRange.Copy\r\n")
-          .append("  wb.Activate\r\n")
-          .append("  ws.Activate\r\n")
-          .append("  ws.Paste ws.Cells(gRow, 1)\r\n")
-          .append("  xl.CutCopyMode = False\r\n")
+          .append("  Set used = src.Worksheets(1).UsedRange\r\n")
+          // クリップボード経由の Paste はシートのアクティブ化が必要で失敗しやすいため、
+          // Range.Copy(Destination) で直接コピーする
+          .append("  used.Copy ws.Cells(gRow, 1)\r\n")
+          .append("  Report \"貼り付け \" & htmlPath\r\n")
+          .append("  gRow = gRow + used.Rows.Count + 2\r\n")
           .append("  src.Close False\r\n")
-          .append("  If Err.Number <> 0 Then Err.Clear\r\n")
-          .append("  On Error GoTo 0\r\n")
-          .append("  gRow = gRow + rows + 2\r\n")
+          .append("  Report \"HTML を閉じる \" & htmlPath\r\n")
           .append("End Sub\r\n\r\n");
 
         // --- データ部 ---
-        sb.append("On Error Resume Next\r\n");
         Set<String> usedNames = new LinkedHashSet<>();
 
         // サマリシート
@@ -1055,7 +1108,8 @@ public final class WinMergeReportTool {
                         r.status.label + (r.message.isEmpty() ? "" : " / " + r.message)));
             }
         }
-        sb.append("ws.Columns(\"A:D\").AutoFit\r\n");
+        sb.append("ws.Columns(\"A:D\").AutoFit\r\n")
+          .append("Report \"サマリの列幅調整\"\r\n");
 
         // テストケースごとのシート
         for (TestCase tc : testCases) {
@@ -1073,26 +1127,40 @@ public final class WinMergeReportTool {
                     sb.append("gRow = gRow + 1\r\n");
                 }
             }
-            sb.append("ws.Columns(\"A:H\").AutoFit\r\n");
         }
 
+        // --- 保存と結果判定 ---
         sb.append("\r\n")
           .append("wb.Worksheets(1).Activate\r\n")
-          .append("wb.SaveAs ").append(vbsStr(cfg.excelPath.toString())).append(", 51\r\n")
+          .append("Report \"先頭シートの選択\"\r\n")
+          .append("wb.SaveAs gOut, 51\r\n")
+          .append("Report \"ブックの保存\"\r\n")
           .append("wb.Close False\r\n")
+          .append("Report \"ブックを閉じる\"\r\n")
           .append("xl.Quit\r\n")
-          .append("Set ws = Nothing\r\n")
-          .append("Set wb = Nothing\r\n")
-          .append("Set xl = Nothing\r\n")
-          .append("If Err.Number <> 0 Then\r\n")
-          .append("  WScript.StdErr.WriteLine \"VBS ERROR: \" & Err.Number & \" \" & Err.Description\r\n")
-          .append("  WScript.Quit 1\r\n")
+          .append("Report \"Excel の終了\"\r\n")
+          .append("\r\n")
+          .append("Dim logStream\r\n")
+          .append("Set logStream = fso.CreateTextFile(gLog, True, True)\r\n")
+          .append("If Err.Number = 0 Then\r\n")
+          .append("  logStream.WriteLine \"出力先: \" & gOut\r\n")
+          .append("  logStream.WriteLine \"保存済み: \" & CStr(fso.FileExists(gOut))\r\n")
+          .append("  logStream.WriteLine gErrors\r\n")
+          .append("  logStream.Close\r\n")
           .append("End If\r\n")
-          .append("WScript.Quit 0\r\n");
+          .append("Err.Clear\r\n")
+          .append("\r\n")
+          // Sub を抜けると Err がリセットされるため、最終判定はファイルの有無で行う
+          .append("If fso.FileExists(gOut) Then\r\n")
+          .append("  If Len(gErrors) > 0 Then WScript.StdErr.WriteLine gErrors\r\n")
+          .append("  WScript.Quit 0\r\n")
+          .append("Else\r\n")
+          .append("  WScript.StdErr.WriteLine \"ブックが保存されませんでした\" & vbCrLf & gErrors\r\n")
+          .append("  WScript.Quit 1\r\n")
+          .append("End If\r\n");
         return sb.toString();
     }
 
-    /** VBScript のサブルーチン呼び出し行を組み立てる（True/False はそのままリテラルとして渡す）。 */
     private static String call(String sub, String... args) {
         StringBuilder sb = new StringBuilder(sub);
         for (int i = 0; i < args.length; i++) {

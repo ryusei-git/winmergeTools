@@ -40,6 +40,7 @@ report/
 ├─ index.html                                   ← 一覧
 ├─ comparison_report_<日時>.xlsx                ← Excel
 ├─ _build_excel.vbs                             ← COM 貼り付け用スクリプト（com モード時）
+├─ _build_excel.log                             ← COM 実行時の診断ログ（com モード時）
 └─ TC001/
     ├─ INPUT_vs_OUTPUT/
     │   ├─ _folder_compare.html                 ← フォルダ比較結果
@@ -187,6 +188,9 @@ WinMerge との連携は正しく動いています。
 | `xlsx` | 外部ライブラリなしで `.xlsx` を直接生成。HTML の表を解析してセルに展開し、元 HTML へのハイパーリンクを付与 | なし |
 
 既定の `auto` は Windows なら `com` を試し、失敗した場合に `xlsx` へフォールバックします。
+フォールバックした場合は理由を `[WARN]` として表示し、`report\_build_excel.vbs`（実行した
+スクリプト）と `report\_build_excel.log`（各操作の成否）を残すので、そこから原因を追えます。
+スクリプトは `cscript //nologo report\_build_excel.vbs` で手動実行して確かめることもできます。
 
 各ブックの構成:
 
