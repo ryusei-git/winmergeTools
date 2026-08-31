@@ -148,12 +148,12 @@ public final class WinMergeReportTool {
     // ======================================================================
 
     enum Status {
-        SAME("一致"),
-        DIFF("差分あり"),
-        LEFT_ONLY("左のみ"),
-        RIGHT_ONLY("右のみ"),
-        ERROR("エラー"),
-        SKIPPED("スキップ");
+        SAME("identical"),
+        DIFF("different"),
+        LEFT_ONLY("left only"),
+        RIGHT_ONLY("right only"),
+        ERROR("error"),
+        SKIPPED("skipped");
 
         final String label;
 
@@ -218,7 +218,7 @@ public final class WinMergeReportTool {
             printUsage();
             System.exit(2);
         } catch (Exception e) {
-            System.err.println("[FATAL] 予期しないエラーが発生しました: " + e);
+            System.err.println("[FATAL] Unexpected error: " + e);
             e.printStackTrace();
             System.exit(1);
         }
@@ -226,27 +226,27 @@ public final class WinMergeReportTool {
 
     private static void printUsage() {
         System.out.println(String.join(System.lineSeparator(),
-                "使い方: java WinMergeReportTool.java [オプション]",
+                "Usage: java WinMergeReportTool.java [options]",
                 "",
-                "  --root <dir>        比較対象のルート（既定: カレントディレクトリ）",
-                "  --report <dir>      レポート出力先（既定: <root>/report）",
-                "  --excel <file>      Excel 出力先（既定: <report>/comparison_report_<日時>.xlsx）",
-                "  --winmerge <exe>    WinMergeU.exe のパス（既定: 環境変数 WINMERGE_PATH → 既知の場所を自動探索）",
-                "  --pair <L>:<R>      比較するサブディレクトリの組（複数指定可）",
-                "                      既定: --pair INPUT:OUTPUT --pair LOG:LOG_COMPARE",
-                "  --excel-mode <mode> auto | com | xlsx | image | none（既定: auto）",
-                "                      image は HTML を PNG 化して Excel に画像として貼り付ける",
-                "  --browser <exe>     PNG 化に使う Edge/Chrome のパス（既定: 自動探索）",
-                "  --image-width <px>  PNG の横幅（既定: 1600）",
-                "  --image-max-height <px> PNG の高さ上限（既定: 16000）",
-                "  --timeout <sec>     WinMerge 1 回あたりのタイムアウト秒（既定: 180）",
-                "  --max-rows <n>      xlsx へ展開する 1 レポートあたりの最大行数（既定: 500）",
-                "  --clean             実行前に report フォルダを削除する",
-                "  --no-exitcode       /enableexitcode を使わず、ファイル内容の一致判定を Java 側で行う",
-                "                      （WinMerge 2.14 以前で /enableexitcode が使えない場合）",
-                "  --max-path <n>      レポートパスの上限文字数（既定: 240、超える場合は短縮名にする）",
-                "  --winmerge-arg <a>  WinMerge へ渡す追加引数（複数指定可）",
-                "  --help              このヘルプ"));
+                "  --root <dir>        root of the tree to compare (default: current directory)",
+                "  --report <dir>      report output directory (default: <root>/report)",
+                "  --excel <file>      workbook path (default: <report>/comparison_report_<time>.xlsx)",
+                "  --winmerge <exe>    path to WinMergeU.exe (default: WINMERGE_PATH, then usual install dirs)",
+                "  --pair <L>:<R>      directory pair to compare; repeatable",
+                "                      default: --pair INPUT:OUTPUT --pair LOG:LOG_COMPARE",
+                "  --excel-mode <mode> auto | com | image | xlsx | none (default: auto)",
+                "                      image renders each report to PNG and embeds the pictures",
+                "  --browser <exe>     Edge/Chrome used for PNG capture (default: auto-detect)",
+                "  --image-width <px>  capture width (default: 1600)",
+                "  --image-max-height <px> capture height cap (default: 16000)",
+                "  --timeout <sec>     timeout per WinMerge run (default: 180)",
+                "  --max-rows <n>      max rows expanded into cells per report (default: 500)",
+                "  --clean             delete the report directory before running",
+                "  --no-exitcode       do not pass /enableexitcode; compare file contents in Java",
+                "                      (for WinMerge 2.14 and older, which lacks that switch)",
+                "  --max-path <n>      max report path length (default: 240; longer ones are shortened)",
+                "  --winmerge-arg <a>  extra argument passed to WinMerge; repeatable",
+                "  --help              show this help"));
     }
 
     private static Config parseArgs(String[] args) {
@@ -275,7 +275,7 @@ public final class WinMergeReportTool {
                     String v = next(args, ++i, a);
                     int sep = v.indexOf(':');
                     if (sep <= 0 || sep == v.length() - 1) {
-                        throw new UsageException("--pair は LEFT:RIGHT の形式で指定してください: " + v);
+                        throw new UsageException("--pair must be given as LEFT:RIGHT: " + v);
                     }
                     pairs.add(new ComparePair(v.substring(0, sep), v.substring(sep + 1)));
                     break;
@@ -283,7 +283,7 @@ public final class WinMergeReportTool {
                 case "--excel-mode":
                     cfg.excelMode = next(args, ++i, a).toLowerCase(Locale.ROOT);
                     if (!Arrays.asList("auto", "com", "xlsx", "image", "none").contains(cfg.excelMode)) {
-                        throw new UsageException("--excel-mode は auto|com|xlsx|image|none のいずれか: " + cfg.excelMode);
+                        throw new UsageException("--excel-mode must be auto|com|image|xlsx|none: " + cfg.excelMode);
                     }
                     break;
                 case "--browser":
@@ -314,7 +314,7 @@ public final class WinMergeReportTool {
                     cfg.extraArgs.add(next(args, ++i, a));
                     break;
                 default:
-                    throw new UsageException("不明なオプション: " + a);
+                    throw new UsageException("Unknown option: " + a);
             }
         }
         if (pairs.isEmpty()) {
@@ -334,7 +334,7 @@ public final class WinMergeReportTool {
 
     private static String next(String[] args, int i, String opt) {
         if (i >= args.length) {
-            throw new UsageException(opt + " には値が必要です");
+            throw new UsageException(opt + " requires a value");
         }
         return args[i];
     }
@@ -343,7 +343,7 @@ public final class WinMergeReportTool {
         try {
             return Long.parseLong(value.trim());
         } catch (NumberFormatException e) {
-            throw new UsageException(opt + " には数値を指定してください: " + value);
+            throw new UsageException(opt + " requires a number: " + value);
         }
     }
 
@@ -353,63 +353,62 @@ public final class WinMergeReportTool {
 
     private int run() throws IOException, InterruptedException {
         System.out.println("==================================================");
-        System.out.println(" WinMerge テストケース比較レポート生成");
+        System.out.println(" WinMerge test case comparison report");
         System.out.println("==================================================");
-        System.out.println("  ルート        : " + cfg.root);
-        System.out.println("  レポート出力先: " + cfg.reportRoot);
-        System.out.println("  Excel 出力先  : " + cfg.excelPath);
-        System.out.println("  比較対象      : " + cfg.pairs.stream().map(p -> p.label).collect(Collectors.joining(", ")));
+        System.out.println("  Root       : " + cfg.root);
+        System.out.println("  Report dir : " + cfg.reportRoot);
+        System.out.println("  Workbook   : " + cfg.excelPath);
+        System.out.println("  Pairs      : " + cfg.pairs.stream().map(p -> p.label).collect(Collectors.joining(", ")));
 
         if (!Files.isDirectory(cfg.root)) {
-            System.err.println("[ERROR] ルートディレクトリが存在しません: " + cfg.root);
+            System.err.println("[ERROR] Root directory does not exist: " + cfg.root);
             return 1;
         }
 
         cfg.winMerge = resolveWinMerge(cfg.winMerge);
-        System.out.println("  WinMerge      : " + (cfg.winMerge == null ? "(見つかりません)" : cfg.winMerge));
+        System.out.println("  WinMerge   : " + (cfg.winMerge == null ? "(not found)" : cfg.winMerge));
         System.out.println();
         if (cfg.winMerge == null) {
-            System.err.println("[ERROR] WinMergeU.exe が見つかりません。--winmerge で明示指定するか、環境変数 WINMERGE_PATH を設定してください。");
+            System.err.println("[ERROR] WinMergeU.exe not found. Pass --winmerge, or set WINMERGE_PATH.");
             return 1;
         }
 
         // Guard against --report pointing at (or above) the data being compared: --clean would
         // otherwise delete the test cases themselves.
         if (cfg.root.equals(cfg.reportRoot) || cfg.root.startsWith(cfg.reportRoot)) {
-            System.err.println("[ERROR] レポート出力先が比較対象を含んでいます。別の場所を指定してください。");
-            System.err.println("        比較対象: " + cfg.root);
-            System.err.println("        出力先  : " + cfg.reportRoot);
+            System.err.println("[ERROR] The report directory contains the tree being compared. Choose another location.");
+            System.err.println("        compared: " + cfg.root);
+            System.err.println("        report  : " + cfg.reportRoot);
             return 1;
         }
         if (cfg.cleanReport && Files.exists(cfg.reportRoot)) {
-            System.out.println("[INFO] 既存の report フォルダを削除します: " + cfg.reportRoot);
+            System.out.println("[INFO] Deleting the existing report directory: " + cfg.reportRoot);
             deleteRecursively(cfg.reportRoot);
         }
         Files.createDirectories(cfg.reportRoot);
         if (isWindows() && cfg.reportRoot.toString().length() > 150) {
-            System.err.println("[WARN] レポート出力先のパスが長いため、MAX_PATH(260) を超える恐れがあります: "
-                    + cfg.reportRoot.toString().length() + " 文字");
-            System.err.println("       --report でより浅い場所を指定するか、--max-path で短縮のしきい値を調整してください。");
+            System.err.println("[WARN] The report path is long and may exceed MAX_PATH (260): "
+                    + cfg.reportRoot.toString().length() + " characters");
+            System.err.println("       Use --report to pick a shallower location, or tune --max-path.");
         }
 
         // Step 1: mirror the source tree so reports can sit beside their originals.
         int mirrored = mirrorDirectoryTree();
-        System.out.println("[INFO] ディレクトリ階層を複製しました（" + mirrored + " 個）");
+        System.out.println("[INFO] Mirrored " + mirrored + " directories");
 
         // Step 2: locate the test case directories.
         collectTestCases();
         if (testCases.isEmpty()) {
-            System.err.println("[WARN] テストケースディレクトリが見つかりませんでした（"
-                    + cfg.pairs.stream().map(p -> p.left + "/" + p.right).collect(Collectors.joining(", "))
-                    + " を含むディレクトリを探索しました）");
+            System.err.println("[WARN] No test case directory found. Looked for directories containing: "
+                    + cfg.pairs.stream().map(p -> p.left + "/" + p.right).collect(Collectors.joining(", ")));
             return 1;
         }
-        System.out.println("[INFO] テストケース " + testCases.size() + " 件を検出しました");
+        System.out.println("[INFO] Found " + testCases.size() + " test cases");
         System.out.println();
 
         // Step 3: run the comparisons.
         for (TestCase tc : testCases) {
-            System.out.println("---- テストケース: " + tc.name + " (" + tc.rel + ")");
+            System.out.println("---- Test case: " + tc.name + " (" + tc.rel + ")");
             processTestCase(tc);
         }
 
@@ -417,7 +416,7 @@ public final class WinMergeReportTool {
         Path index = cfg.reportRoot.resolve("index.html");
         writeIndexHtml(index);
         System.out.println();
-        System.out.println("[INFO] 一覧レポート: " + index);
+        System.out.println("[INFO] Index: " + index);
 
         // Step 5: workbook.
         writeExcel();
@@ -445,12 +444,12 @@ public final class WinMergeReportTool {
             }
         }
         System.out.println();
-        System.out.println("==================== 集計 ====================");
-        System.out.println("  テストケース : " + testCases.size());
-        System.out.println("  一致         : " + same);
-        System.out.println("  差分あり     : " + diff);
-        System.out.println("  片側のみ     : " + only);
-        System.out.println("  エラー       : " + err);
+        System.out.println("==================== Summary ====================");
+        System.out.println("  Test cases : " + testCases.size());
+        System.out.println("  Identical  : " + same);
+        System.out.println("  Different  : " + diff);
+        System.out.println("  One-sided  : " + only);
+        System.out.println("  Errors     : " + err);
         System.out.println("==============================================");
     }
 
@@ -537,7 +536,7 @@ public final class WinMergeReportTool {
 
             @Override
             public FileVisitResult visitFileFailed(Path file, IOException exc) {
-                System.err.println("[WARN] 走査に失敗しました: " + file + " (" + exc.getMessage() + ")");
+                System.err.println("[WARN] Failed to walk: " + file + " (" + exc.getMessage() + ")");
                 return FileVisitResult.CONTINUE;
             }
         });
@@ -631,13 +630,13 @@ public final class WinMergeReportTool {
 
             if (!Files.isDirectory(leftDir) || !Files.isDirectory(rightDir)) {
                 CompareResult r = new CompareResult();
-                r.kind = "フォルダ比較";
+                r.kind = "folder compare";
                 r.pairLabel = pair.label;
-                r.name = "(フォルダ全体)";
+                r.name = "(whole folder)";
                 r.left = leftDir;
                 r.right = rightDir;
                 r.status = Status.ERROR;
-                r.message = "比較対象のディレクトリが存在しません: "
+                r.message = "Missing directory: "
                         + (Files.isDirectory(leftDir) ? rightDir : leftDir);
                 tc.results.add(r);
                 System.out.println("     [NG] " + pair.label + " : " + r.message);
@@ -655,13 +654,13 @@ public final class WinMergeReportTool {
             } catch (IOException | UncheckedIOException e) {
                 // An unreadable subdirectory must fail this pair only, not the whole run.
                 CompareResult r = new CompareResult();
-                r.kind = "ファイル比較";
+                r.kind = "file compare";
                 r.pairLabel = pair.label;
-                r.name = "(一覧の取得)";
+                r.name = "(file listing)";
                 r.left = leftDir;
                 r.right = rightDir;
                 r.status = Status.ERROR;
-                r.message = "ファイル一覧を取得できません: " + e.getMessage();
+                r.message = "Cannot list files: " + e.getMessage();
                 tc.results.add(r);
                 System.out.println("     [NG] " + pair.label + " : " + r.message);
                 continue;
@@ -675,9 +674,9 @@ public final class WinMergeReportTool {
     private CompareResult runFolderCompare(ComparePair pair, Path leftDir, Path rightDir, Path outDir)
             throws IOException, InterruptedException {
         CompareResult r = new CompareResult();
-        r.kind = "フォルダ比較";
+        r.kind = "folder compare";
         r.pairLabel = pair.label;
-        r.name = "(フォルダ全体)";
+        r.name = "(whole folder)";
         r.left = leftDir;
         r.right = rightDir;
         r.report = outDir.resolve("_folder_compare.html");
@@ -686,7 +685,7 @@ public final class WinMergeReportTool {
         List<String> cmd = buildWinMergeCommand(true, leftDir, rightDir, r.report);
         ExecResult ex = exec(cmd);
         applyExitCode(r, ex);
-        System.out.println("     [" + statusMark(r.status) + "] " + pair.label + " フォルダ比較 -> "
+        System.out.println("     [" + statusMark(r.status) + "] " + pair.label + " folder compare -> "
                 + reportLabel(r));
         return r;
     }
@@ -694,7 +693,7 @@ public final class WinMergeReportTool {
     private CompareResult runFileCompare(ComparePair pair, Path leftDir, Path rightDir, Path fileOutDir, String rel)
             throws IOException, InterruptedException {
         CompareResult r = new CompareResult();
-        r.kind = "ファイル比較";
+        r.kind = "file compare";
         r.pairLabel = pair.label;
         r.name = rel;
         r.left = leftDir.resolve(rel);
@@ -705,15 +704,15 @@ public final class WinMergeReportTool {
         if (!hasLeft || !hasRight) {
             r.status = hasLeft ? Status.LEFT_ONLY : Status.RIGHT_ONLY;
             r.message = hasLeft
-                    ? pair.right + " 側にファイルがありません"
-                    : pair.left + " 側にファイルがありません";
+                    ? "not present in " + pair.right
+                    : "not present in " + pair.left;
             System.out.println("     [--] " + pair.label + " " + rel + " : " + r.message);
             return r;
         }
 
         r.report = shortenIfTooLong(fileOutDir, rel);
         if (!r.report.equals(fileOutDir.resolve(rel + ".html"))) {
-            r.message = "パスが長いためレポート名を短縮しました";
+            r.message = "report name shortened because the path was too long";
         }
         Files.createDirectories(r.report.getParent());
         List<String> cmd = buildWinMergeCommand(false, r.left, r.right, r.report);
@@ -764,7 +763,7 @@ public final class WinMergeReportTool {
     private static String statusMark(Status s) {
         switch (s) {
             case SAME: return "OK";
-            case DIFF: return "差分";
+            case DIFF: return "DIFF";
             case ERROR: return "NG";
             default: return "--";
         }
@@ -774,7 +773,7 @@ public final class WinMergeReportTool {
         r.exitCode = ex.exitCode;
         if (ex.timedOut) {
             r.status = Status.ERROR;
-            r.message = "タイムアウト（" + cfg.timeoutSec + "秒）";
+            r.message = "timed out after " + cfg.timeoutSec + "s";
             return;
         }
         if (cfg.enableExitCode) {
@@ -788,12 +787,12 @@ public final class WinMergeReportTool {
                     break;
                 default:
                     r.status = Status.ERROR;
-                    r.message = "WinMerge 異常終了 (exit=" + ex.exitCode + ") " + ex.output.trim();
+                    r.message = "WinMerge failed (exit=" + ex.exitCode + ") " + ex.output.trim();
                     break;
             }
         } else if (ex.exitCode != 0) {
             r.status = Status.ERROR;
-            r.message = "WinMerge 異常終了 (exit=" + ex.exitCode + ") " + ex.output.trim();
+            r.message = "WinMerge failed (exit=" + ex.exitCode + ") " + ex.output.trim();
         } else {
             // WinMerge older than 2.16 has no /enableexitcode and always exits 0, so the
             // verdict has to come from comparing the bytes ourselves.
@@ -801,7 +800,7 @@ public final class WinMergeReportTool {
         }
         if (r.report != null && !Files.isRegularFile(r.report)) {
             if (r.status != Status.ERROR) {
-                r.message = "レポートファイルが生成されませんでした";
+                r.message = "no report file was produced";
             }
             r.report = null;
         }
@@ -967,20 +966,20 @@ public final class WinMergeReportTool {
     private void writeIndexHtml(Path out) throws IOException {
         StringBuilder sb = new StringBuilder();
         sb.append("<!DOCTYPE html>\n<html lang=\"ja\"><head><meta charset=\"UTF-8\">\n")
-          .append("<title>比較レポート一覧</title>\n<style>\n")
+          .append("<title>Comparison reports</title>\n<style>\n")
           .append("body{font-family:'Meiryo UI',sans-serif;font-size:13px;margin:16px;}\n")
           .append("h1{font-size:18px;} h2{font-size:15px;margin-top:24px;border-left:6px solid #4472c4;padding-left:8px;}\n")
           .append("table{border-collapse:collapse;margin-bottom:8px;} th,td{border:1px solid #bfbfbf;padding:3px 8px;}\n")
           .append("th{background:#d9e1f2;} .same{color:#1f7a1f;} .diff{color:#c00000;font-weight:bold;}\n")
           .append(".err{color:#ff6600;font-weight:bold;} .only{color:#7f7f7f;}\n</style></head><body>\n")
-          .append("<h1>WinMerge 比較レポート一覧</h1>\n")
-          .append("<p>生成日時: ").append(esc(LocalDateTime.now().format(TS_HUMAN))).append("<br>\n")
-          .append("対象ルート: ").append(esc(cfg.root.toString())).append("</p>\n");
+          .append("<h1>WinMerge comparison reports</h1>\n")
+          .append("<p>Generated: ").append(esc(LocalDateTime.now().format(TS_HUMAN))).append("<br>\n")
+          .append("Root: ").append(esc(cfg.root.toString())).append("</p>\n");
 
         for (TestCase tc : testCases) {
             sb.append("<h2>").append(esc(tc.name)).append(" <span style=\"font-weight:normal;font-size:12px;color:#666\">(")
               .append(esc(tc.rel.toString())).append(")</span></h2>\n");
-            sb.append("<table><tr><th>比較</th><th>種別</th><th>対象</th><th>結果</th><th>レポート</th><th>備考</th></tr>\n");
+            sb.append("<table><tr><th>Pair</th><th>Kind</th><th>Target</th><th>Result</th><th>Report</th><th>Note</th></tr>\n");
             for (CompareResult r : tc.results) {
                 sb.append("<tr><td>").append(esc(r.pairLabel)).append("</td><td>").append(esc(r.kind))
                   .append("</td><td>").append(esc(r.name)).append("</td><td class=\"")
@@ -1014,23 +1013,23 @@ public final class WinMergeReportTool {
 
     private void writeExcel() {
         if ("none".equals(cfg.excelMode)) {
-            System.out.println("[INFO] Excel 出力はスキップされました（--excel-mode none）");
+            System.out.println("[INFO] Excel output skipped (--excel-mode none)");
             return;
         }
         try {
             Files.createDirectories(cfg.excelPath.getParent());
         } catch (IOException e) {
-            System.err.println("[ERROR] Excel 出力先を作成できません: " + e.getMessage());
+            System.err.println("[ERROR] Cannot create the workbook directory: " + e.getMessage());
             return;
         }
 
         if ("image".equals(cfg.excelMode)) {
             try {
                 boolean pasted = writeXlsxWithImages();
-                System.out.println("[INFO] Excel ブックを作成しました（"
-                        + (pasted ? "画像貼り付け" : "xlsx 直接生成") + "）: " + cfg.excelPath);
+                System.out.println("[INFO] Workbook written ("
+                        + (pasted ? "embedded images" : "text expansion") + "): " + cfg.excelPath);
             } catch (IOException | InterruptedException e) {
-                System.err.println("[ERROR] 画像貼り付け版の生成に失敗しました: " + e.getMessage());
+                System.err.println("[ERROR] Failed to build the image workbook: " + e.getMessage());
             }
             return;
         }
@@ -1040,24 +1039,24 @@ public final class WinMergeReportTool {
         if (comCandidate) {
             try {
                 if (writeExcelViaCom()) {
-                    System.out.println("[INFO] Excel ブックを作成しました（COM 貼り付け）: " + cfg.excelPath);
+                    System.out.println("[INFO] Workbook written (Excel COM paste): " + cfg.excelPath);
                     return;
                 }
             } catch (Exception e) {
-                System.err.println("[WARN] Excel COM 自動化を実行できませんでした: " + e);
+                System.err.println("[WARN] Could not run the Excel COM automation: " + e);
             }
             if ("com".equals(cfg.excelMode)) {
-                System.err.println("[ERROR] Excel COM 出力に失敗しました。--excel-mode xlsx を試してください。");
+                System.err.println("[ERROR] Excel COM output failed. Try --excel-mode xlsx.");
                 return;
             }
-            System.err.println("[WARN] xlsx 直接生成へフォールバックします。");
+            System.err.println("[WARN] Falling back to direct xlsx generation.");
         }
 
         try {
             writeXlsx();
-            System.out.println("[INFO] Excel ブックを作成しました（xlsx 直接生成）: " + cfg.excelPath);
+            System.out.println("[INFO] Workbook written (direct xlsx): " + cfg.excelPath);
         } catch (IOException e) {
-            System.err.println("[ERROR] xlsx の生成に失敗しました: " + e.getMessage());
+            System.err.println("[ERROR] Failed to write the xlsx: " + e.getMessage());
         }
     }
 
@@ -1141,7 +1140,7 @@ public final class WinMergeReportTool {
         }
         ExecResult ex = exec(cmd, cfg.timeoutSec);
         if (!Files.isRegularFile(png) || Files.size(png) == 0 || pngSize(png) == null) {
-            System.err.println("[WARN] PNG 化に失敗しました: " + html.getFileName()
+            System.err.println("[WARN] Screenshot failed: " + html.getFileName()
                     + " (exit=" + ex.exitCode + ") " + ex.output.trim());
             return false;
         }
@@ -1194,7 +1193,7 @@ public final class WinMergeReportTool {
         boolean created = Files.isRegularFile(cfg.excelPath);
         if (created && !ex.timedOut && ex.exitCode == 0) {
             if (!ex.output.isBlank()) {
-                System.err.println("[WARN] Excel COM の警告: " + ex.output.trim());
+                System.err.println("[WARN] Excel COM warning: " + ex.output.trim());
             }
             return true;
         }
@@ -1202,17 +1201,17 @@ public final class WinMergeReportTool {
         // Always say why it failed. This used to return false silently, which hid the real
         // cause (Excel not installed) behind a bare fallback message. The script collects its
         // own diagnostics because VBScript clears Err when a Sub returns - see buildVbScript.
-        System.err.println("[WARN] Excel COM 自動化に失敗しました"
-                + (ex.timedOut ? "（タイムアウト）" : "（cscript exit=" + ex.exitCode + "）")
-                + (created ? "" : " / ブック未生成"));
+        System.err.println("[WARN] Excel COM automation failed"
+                + (ex.timedOut ? " (timed out)" : " (cscript exit=" + ex.exitCode + ")")
+                + (created ? "" : " / no workbook produced"));
         if (!ex.output.isBlank()) {
             for (String line : ex.output.trim().split("\\R")) {
                 System.err.println("       " + line);
             }
         }
-        System.err.println("       スクリプト: " + vbs);
+        System.err.println("       script: " + vbs);
         if (Files.isRegularFile(log)) {
-            System.err.println("       ログ      : " + log);
+            System.err.println("       log   : " + log);
         }
         return false;
     }
@@ -1255,7 +1254,7 @@ public final class WinMergeReportTool {
           .append("On Error Resume Next\r\n")
           .append("Set xl = CreateObject(\"Excel.Application\")\r\n")
           .append("If Err.Number <> 0 Then\r\n")
-          .append("  WScript.StdErr.WriteLine \"Excel を起動できません (Excel 未インストールの可能性): \" ")
+          .append("  WScript.StdErr.WriteLine \"Cannot start Excel (probably not installed): \" ")
           .append("& Err.Number & \" \" & Err.Description\r\n")
           .append("  WScript.Quit 2\r\n")
           .append("End If\r\n")
@@ -1268,7 +1267,7 @@ public final class WinMergeReportTool {
           .append("Do While wb.Worksheets.Count > 1\r\n")
           .append("  wb.Worksheets(wb.Worksheets.Count).Delete\r\n")
           .append("Loop\r\n")
-          .append("Report \"初期化\"\r\n");
+          .append("Report \"init\"\r\n");
 
         // --- Subroutine definitions (VBScript hoists these, so call sites may precede them) ---
         sb.append("\r\n")
@@ -1287,16 +1286,16 @@ public final class WinMergeReportTool {
           .append("    wb.Worksheets.Add , wb.Worksheets(wb.Worksheets.Count)\r\n")
           .append("    Set ws = wb.Worksheets(wb.Worksheets.Count)\r\n")
           .append("  End If\r\n")
-          .append("  Report \"シート追加 \" & sname\r\n")
+          .append("  Report \"add sheet \" & sname\r\n")
           .append("  ws.Name = sname\r\n")
-          .append("  Report \"シート名設定 \" & sname\r\n")
+          .append("  Report \"name sheet \" & sname\r\n")
           .append("  gRow = 1\r\n")
           .append("End Sub\r\n\r\n")
           .append("Sub AddLine(txt, isBold)\r\n")
           .append("  On Error Resume Next\r\n")
           .append("  ws.Cells(gRow, 1).Value = txt\r\n")
           .append("  ws.Cells(gRow, 1).Font.Bold = isBold\r\n")
-          .append("  Report \"行の書き込み\"\r\n")
+          .append("  Report \"write row\"\r\n")
           .append("  gRow = gRow + 1\r\n")
           .append("End Sub\r\n\r\n")
           .append("Sub AddRow4(c1, c2, c3, c4)\r\n")
@@ -1305,7 +1304,7 @@ public final class WinMergeReportTool {
           .append("  ws.Cells(gRow, 2).Value = c2\r\n")
           .append("  ws.Cells(gRow, 3).Value = c3\r\n")
           .append("  ws.Cells(gRow, 4).Value = c4\r\n")
-          .append("  Report \"行の書き込み\"\r\n")
+          .append("  Report \"write row\"\r\n")
           .append("  gRow = gRow + 1\r\n")
           .append("End Sub\r\n\r\n")
           .append("Sub AddReport(title, htmlPath)\r\n")
@@ -1313,17 +1312,17 @@ public final class WinMergeReportTool {
           .append("  On Error Resume Next\r\n")
           .append("  AddLine title, True\r\n")
           .append("  If Not fso.FileExists(htmlPath) Then\r\n")
-          .append("    AddLine \"  レポートがありません: \" & htmlPath, False\r\n")
+          .append("    AddLine \"  report not found: \" & htmlPath, False\r\n")
           .append("    gRow = gRow + 1\r\n")
           .append("    Exit Sub\r\n")
           .append("  End If\r\n")
           .append("  ws.Hyperlinks.Add ws.Cells(gRow, 1), htmlPath, , , htmlPath\r\n")
-          .append("  Report \"リンク追加 \" & htmlPath\r\n")
+          .append("  Report \"add link \" & htmlPath\r\n")
           .append("  gRow = gRow + 1\r\n")
           .append("  Set src = xl.Workbooks.Open(htmlPath, False, True)\r\n")
           .append("  If Err.Number <> 0 Then\r\n")
-          .append("    Report \"HTML を開けません \" & htmlPath\r\n")
-          .append("    AddLine \"  HTML の取り込みに失敗しました\", False\r\n")
+          .append("    Report \"cannot open HTML \" & htmlPath\r\n")
+          .append("    AddLine \"  failed to import the HTML\", False\r\n")
           .append("    gRow = gRow + 1\r\n")
           .append("    Exit Sub\r\n")
           .append("  End If\r\n")
@@ -1332,22 +1331,22 @@ public final class WinMergeReportTool {
           // target sheet to be active and leaves CutCopyMode set, which is fragile in an
           // invisible Excel instance.
           .append("  used.Copy ws.Cells(gRow, 1)\r\n")
-          .append("  Report \"貼り付け \" & htmlPath\r\n")
+          .append("  Report \"paste \" & htmlPath\r\n")
           .append("  gRow = gRow + used.Rows.Count + 2\r\n")
           .append("  src.Close False\r\n")
-          .append("  Report \"HTML を閉じる \" & htmlPath\r\n")
+          .append("  Report \"close HTML \" & htmlPath\r\n")
           .append("End Sub\r\n\r\n");
 
         // --- Data section: one call per sheet and per report ---
         Set<String> usedNames = new LinkedHashSet<>();
 
         // Summary sheet, always first.
-        sb.append(call("AddSheet", uniqueSheetName("サマリ", usedNames)));
-        sb.append(call("AddLine", "WinMerge 比較レポート サマリ", "True"));
-        sb.append(call("AddLine", "生成日時: " + LocalDateTime.now().format(TS_HUMAN), "False"));
-        sb.append(call("AddLine", "対象ルート: " + cfg.root, "False"));
+        sb.append(call("AddSheet", uniqueSheetName("Summary", usedNames)));
+        sb.append(call("AddLine", "WinMerge comparison report - summary", "True"));
+        sb.append(call("AddLine", "Generated: " + LocalDateTime.now().format(TS_HUMAN), "False"));
+        sb.append(call("AddLine", "Root: " + cfg.root, "False"));
         sb.append("gRow = gRow + 1\r\n");
-        sb.append(call("AddRow4", "テストケース", "比較", "対象", "結果"));
+        sb.append(call("AddRow4", "Test case", "Pair", "Target", "Result"));
         for (TestCase tc : testCases) {
             for (CompareResult r : tc.results) {
                 sb.append(call("AddRow4", tc.name, r.pairLabel, r.kind + " " + r.name,
@@ -1355,13 +1354,13 @@ public final class WinMergeReportTool {
             }
         }
         sb.append("ws.Columns(\"A:D\").AutoFit\r\n")
-          .append("Report \"サマリの列幅調整\"\r\n");
+          .append("Report \"autofit summary\"\r\n");
 
         // One sheet per test case.
         for (TestCase tc : testCases) {
             sb.append(call("AddSheet", uniqueSheetName(tc.name, usedNames)));
-            sb.append(call("AddLine", "テストケース: " + tc.name, "True"));
-            sb.append(call("AddLine", "パス: " + tc.dir, "False"));
+            sb.append(call("AddLine", "Test case: " + tc.name, "True"));
+            sb.append(call("AddLine", "Path: " + tc.dir, "False"));
             sb.append("gRow = gRow + 1\r\n");
             for (CompareResult r : tc.results) {
                 String title = "[" + r.pairLabel + "] " + r.kind + " : " + r.name
@@ -1378,19 +1377,19 @@ public final class WinMergeReportTool {
         // --- Save, then decide success ---
         sb.append("\r\n")
           .append("wb.Worksheets(1).Activate\r\n")
-          .append("Report \"先頭シートの選択\"\r\n")
+          .append("Report \"select first sheet\"\r\n")
           .append("wb.SaveAs gOut, 51\r\n")
-          .append("Report \"ブックの保存\"\r\n")
+          .append("Report \"save workbook\"\r\n")
           .append("wb.Close False\r\n")
-          .append("Report \"ブックを閉じる\"\r\n")
+          .append("Report \"close workbook\"\r\n")
           .append("xl.Quit\r\n")
-          .append("Report \"Excel の終了\"\r\n")
+          .append("Report \"quit Excel\"\r\n")
           .append("\r\n")
           .append("Dim logStream\r\n")
           .append("Set logStream = fso.CreateTextFile(gLog, True, True)\r\n")
           .append("If Err.Number = 0 Then\r\n")
-          .append("  logStream.WriteLine \"出力先: \" & gOut\r\n")
-          .append("  logStream.WriteLine \"保存済み: \" & CStr(fso.FileExists(gOut))\r\n")
+          .append("  logStream.WriteLine \"target: \" & gOut\r\n")
+          .append("  logStream.WriteLine \"saved: \" & CStr(fso.FileExists(gOut))\r\n")
           .append("  logStream.WriteLine gErrors\r\n")
           .append("  logStream.Close\r\n")
           .append("End If\r\n")
@@ -1401,7 +1400,7 @@ public final class WinMergeReportTool {
           .append("  If Len(gErrors) > 0 Then WScript.StdErr.WriteLine gErrors\r\n")
           .append("  WScript.Quit 0\r\n")
           .append("Else\r\n")
-          .append("  WScript.StdErr.WriteLine \"ブックが保存されませんでした\" & vbCrLf & gErrors\r\n")
+          .append("  WScript.StdErr.WriteLine \"the workbook was not saved\" & vbCrLf & gErrors\r\n")
           .append("  WScript.Quit 1\r\n")
           .append("End If\r\n");
         return sb.toString();
@@ -1500,12 +1499,12 @@ public final class WinMergeReportTool {
     private boolean writeXlsxWithImages() throws IOException, InterruptedException {
         String browser = resolveBrowser();
         if (browser == null) {
-            System.err.println("[WARN] PNG 化に使えるブラウザ（Edge / Chrome）が見つかりません。");
-            System.err.println("       --browser で msedge.exe のパスを指定してください。テキスト展開版を生成します。");
+            System.err.println("[WARN] No browser (Edge / Chrome) found for PNG capture.");
+            System.err.println("       Pass --browser with the path to msedge.exe. Falling back to text expansion.");
             writeXlsx();
             return false;
         }
-        System.out.println("[INFO] PNG 化に使用するブラウザ: " + browser);
+        System.out.println("[INFO] Browser used for capture: " + browser);
 
         Path imageDir = cfg.reportRoot.resolve("_images");
         List<SheetData> sheets = new ArrayList<>();
@@ -1517,8 +1516,8 @@ public final class WinMergeReportTool {
         for (TestCase tc : testCases) {
             SheetData sd = new SheetData(uniqueSheetName(tc.name, usedNames));
             sd.colWidths = new double[]{60, 18, 18, 18, 18, 18, 18, 18};
-            sd.addText("テストケース: " + tc.name, ST_TITLE);
-            sd.addText("パス: " + tc.dir, ST_NORMAL);
+            sd.addText("Test case: " + tc.name, ST_TITLE);
+            sd.addText("Path: " + tc.dir, ST_NORMAL);
             sd.blank();
 
             for (CompareResult r : tc.results) {
@@ -1529,7 +1528,7 @@ public final class WinMergeReportTool {
                     continue;
                 }
                 String rel = cfg.reportRoot.relativize(r.report).toString().replace('\\', '/');
-                sd.add(new Cell("レポートを開く: " + rel, ST_LINK, hyperlinkTarget(r.report)));
+                sd.add(new Cell("Open report: " + rel, ST_LINK, hyperlinkTarget(r.report)));
 
                 Path png = imageDir.resolve(rel + ".png");
                 if (renderHtmlToPng(browser, r.report, png)) {
@@ -1545,31 +1544,31 @@ public final class WinMergeReportTool {
                     }
                     done++;
                 } else {
-                    sd.addText("（PNG 化に失敗しました。上のリンクから HTML を参照してください）", ST_NORMAL);
+                    sd.addText("(screenshot failed; open the HTML through the link above)", ST_NORMAL);
                     failed++;
                 }
                 sd.blank();
             }
             sheets.add(sd);
-            System.out.println("     画像化: " + tc.name + " 完了");
+            System.out.println("     captured: " + tc.name);
         }
 
         writeXlsxFile(cfg.excelPath, sheets);
-        System.out.println("[INFO] 画像 " + done + " 枚を貼り付けました"
-                + (failed > 0 ? "（失敗 " + failed + " 枚）" : "") + " / 画像の保存先: " + imageDir);
+        System.out.println("[INFO] Embedded " + done + " images"
+                + (failed > 0 ? " (" + failed + " failed)" : "") + " / PNGs kept in: " + imageDir);
         return true;
     }
 
     /** The summary sheet is identical in image and text mode. */
     private SheetData buildSummarySheet(Set<String> usedNames) {
-        SheetData summary = new SheetData(uniqueSheetName("サマリ", usedNames));
+        SheetData summary = new SheetData(uniqueSheetName("Summary", usedNames));
         summary.colWidths = new double[]{24, 22, 14, 44, 12, 40, 40};
-        summary.addText("WinMerge 比較レポート サマリ", ST_TITLE);
-        summary.addText("生成日時: " + LocalDateTime.now().format(TS_HUMAN), ST_NORMAL);
-        summary.addText("対象ルート: " + cfg.root, ST_NORMAL);
+        summary.addText("WinMerge comparison report - summary", ST_TITLE);
+        summary.addText("Generated: " + LocalDateTime.now().format(TS_HUMAN), ST_NORMAL);
+        summary.addText("Root: " + cfg.root, ST_NORMAL);
         summary.blank();
-        summary.add(header("テストケース"), header("比較"), header("種別"), header("対象"),
-                header("結果"), header("備考"), header("レポート"));
+        summary.add(header("Test case"), header("Pair"), header("Kind"), header("Target"),
+                header("Result"), header("Note"), header("Report"));
         for (TestCase tc : testCases) {
             for (CompareResult r : tc.results) {
                 summary.add(
@@ -1593,14 +1592,14 @@ public final class WinMergeReportTool {
         Set<String> usedNames = new LinkedHashSet<>();
 
         // --- Summary sheet ---
-        SheetData summary = new SheetData(uniqueSheetName("サマリ", usedNames));
+        SheetData summary = new SheetData(uniqueSheetName("Summary", usedNames));
         summary.colWidths = new double[]{24, 22, 14, 44, 12, 40, 40};
-        summary.addText("WinMerge 比較レポート サマリ", ST_TITLE);
-        summary.addText("生成日時: " + LocalDateTime.now().format(TS_HUMAN), ST_NORMAL);
-        summary.addText("対象ルート: " + cfg.root, ST_NORMAL);
+        summary.addText("WinMerge comparison report - summary", ST_TITLE);
+        summary.addText("Generated: " + LocalDateTime.now().format(TS_HUMAN), ST_NORMAL);
+        summary.addText("Root: " + cfg.root, ST_NORMAL);
         summary.blank();
-        summary.add(header("テストケース"), header("比較"), header("種別"), header("対象"),
-                header("結果"), header("備考"), header("レポート"));
+        summary.add(header("Test case"), header("Pair"), header("Kind"), header("Target"),
+                header("Result"), header("Note"), header("Report"));
         for (TestCase tc : testCases) {
             for (CompareResult r : tc.results) {
                 summary.add(
@@ -1621,14 +1620,14 @@ public final class WinMergeReportTool {
         // --- One sheet per test case ---
         for (TestCase tc : testCases) {
             SheetData sd = new SheetData(uniqueSheetName(tc.name, usedNames));
-            sd.addText("テストケース: " + tc.name, ST_TITLE);
-            sd.addText("パス: " + tc.dir, ST_NORMAL);
+            sd.addText("Test case: " + tc.name, ST_TITLE);
+            sd.addText("Path: " + tc.dir, ST_NORMAL);
             sd.blank();
             for (CompareResult r : tc.results) {
                 sd.addText("[" + r.pairLabel + "] " + r.kind + " : " + r.name
                         + "  => " + r.status.label + (r.message.isEmpty() ? "" : " (" + r.message + ")"), ST_BOLD);
                 if (r.report != null) {
-                    sd.add(new Cell("レポートを開く: " + cfg.reportRoot.relativize(r.report).toString().replace('\\', '/'),
+                    sd.add(new Cell("Open report: " + cfg.reportRoot.relativize(r.report).toString().replace('\\', '/'),
                             ST_LINK, hyperlinkTarget(r.report)));
                     List<List<String>> table = extractHtmlRows(r.report, cfg.maxTableRows);
                     boolean first = true;
@@ -1641,7 +1640,7 @@ public final class WinMergeReportTool {
                         first = false;
                     }
                     if (table.isEmpty()) {
-                        sd.addText("（レポート本文を解析できませんでした。上のリンクから HTML を参照してください）", ST_NORMAL);
+                        sd.addText("(could not parse the report; open the HTML through the link above)", ST_NORMAL);
                     }
                 }
                 sd.blank();
