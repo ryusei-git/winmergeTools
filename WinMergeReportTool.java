@@ -16,6 +16,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -1495,6 +1496,12 @@ public final class WinMergeReportTool {
         final String name;
         final List<List<Cell>> rows = new ArrayList<>();
         final List<ImageRef> images = new ArrayList<>();
+        /**
+         * Indexes of blank rows written with an explicit height. Renderers disagree on the
+         * default row height (Excel 15pt, LibreOffice ~12.8pt), so the rows reserved for a
+         * picture pin it to ROW_HEIGHT_PX; otherwise the picture overlaps whatever follows.
+         */
+        final Set<Integer> fixedHeightRows = new HashSet<>();
         double[] colWidths = {40, 18, 18, 18, 18, 18, 18, 18};
 
         SheetData(String name) {
@@ -1510,6 +1517,12 @@ public final class WinMergeReportTool {
         }
 
         void blank() {
+            rows.add(List.of());
+        }
+
+        /** Blank row of a known height, used to reserve space for a picture. */
+        void spacer() {
+            fixedHeightRows.add(rows.size());
             rows.add(List.of());
         }
     }
@@ -1560,13 +1573,19 @@ public final class WinMergeReportTool {
                     int[] size = pngSize(png);
                     int w = size == null ? cfg.imageWidth : size[0];
                     int h = size == null ? 600 : size[1];
+                    // One spacer row above the picture. A one-cell anchor pins the top-left
+                    // corner to the cell, but rows with a larger font are taller than the
+                    // ROW_HEIGHT_PX estimate below, so without the spacer the picture lands on
+                    // top of the hyperlink line.
+                    sd.spacer();
                     sd.images.add(new ImageRef(png, sd.rows.size(), w, h,
                             cfg.imageBorder, cfg.imageBorderWidthPt));
-                    // Advance past the picture. A one-cell anchor does not reserve space, so
-                    // without these blank rows the next heading would sit under the image.
-                    int rowsNeeded = (int) Math.ceil(h / 20.0);
+                    // Advance past the picture. A one-cell anchor reserves no space, so without
+                    // these blank rows the next heading would be drawn over the image. The extra
+                    // row leaves a visible gap instead of the next heading touching the border.
+                    int rowsNeeded = (int) Math.ceil(h / (double) ROW_HEIGHT_PX) + 1;
                     for (int i = 0; i < rowsNeeded; i++) {
-                        sd.blank();
+                        sd.spacer();
                     }
                     done++;
                 } else {
@@ -1805,6 +1824,10 @@ public final class WinMergeReportTool {
         }
     }
 
+    /** Height of the rows reserved for pictures, in points and in pixels (15pt at 96dpi). */
+    private static final int ROW_HEIGHT_PT = 15;
+    private static final int ROW_HEIGHT_PX = 20;
+
     /** OOXML measures drawings in EMU (English Metric Units); 1 pixel is 9525 EMU. */
     private static final int EMU_PER_PX = 9525;
 
@@ -1906,6 +1929,10 @@ public final class WinMergeReportTool {
             List<Cell> row = sd.rows.get(rIdx);
             int rowNum = rIdx + 1;
             if (row.isEmpty()) {
+                if (sd.fixedHeightRows.contains(rIdx)) {
+                    sb.append("<row r=\"").append(rowNum).append("\" ht=\"")
+                      .append(ROW_HEIGHT_PT).append("\" customHeight=\"1\"/>");
+                }
                 continue;
             }
             sb.append("<row r=\"").append(rowNum).append("\">");
