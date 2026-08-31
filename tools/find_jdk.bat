@@ -1,15 +1,20 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem JDK の場所を解決し、環境変数 JAVAC / JAVA に設定する。
-rem run.bat と setup_test_env.bat から call されるヘルパー。
+rem Resolve a JDK and expose it as JAVAC / JAVA to the calling batch file.
+rem Called from run.bat and setup_test_env.bat.
 rem
-rem 探索順:
-rem   1. PATH 上の javac（通常インストール）
+rem Search order:
+rem   1. javac on PATH (normal installation)
 rem   2. %JAVA_HOME%\bin\javac.exe
-rem   3. ツールと同じ場所の jdk フォルダ（ポータブル JDK を隣に置いた場合）
-rem   4. C:\tools\jdk, C:\jdk, D:\tools\jdk（よく使う展開先）
+rem   3. a "jdk" folder next to the tool (portable JDK extracted beside it)
+rem   4. C:\tools\jdk, C:\jdk, D:\tools\jdk, and jdk* under those roots
 rem
-rem システムの PATH やレジストリは変更しない。呼び出し元の setlocal の中でのみ有効。
+rem Nothing is written to the system PATH or the registry. The variables live
+rem only inside the caller's setlocal scope.
+rem
+rem NOTE: this file must stay ASCII-only. cmd.exe reads batch files by byte
+rem offset, so multibyte characters (and any chcp switch) can split lines in
+rem the wrong place and corrupt parsing.
 rem ---------------------------------------------------------------------------
 
 set "JAVAC="
@@ -36,8 +41,8 @@ for %%D in ("%~dp0..\jdk" "%~dp0jdk" "C:\tools\jdk" "C:\jdk" "D:\tools\jdk") do 
   )
 )
 
-rem 展開直後のフォルダ名（jdk-21.0.5+11 など）のまま置かれている場合も拾う
-for /d %%D in ("%~dp0..\jdk*" "C:\tools\jdk*") do (
+rem Also accept the extraction folder name as-is, e.g. jdk-21.0.5+11
+for /d %%D in ("%~dp0..\jdk*" "C:\tools\jdk*" "C:\jdk*" "D:\tools\jdk*") do (
   if exist "%%~fD\bin\javac.exe" (
     set "JAVAC=%%~fD\bin\javac.exe"
     set "JAVA=%%~fD\bin\java.exe"
@@ -45,18 +50,19 @@ for /d %%D in ("%~dp0..\jdk*" "C:\tools\jdk*") do (
   )
 )
 
-echo [ERROR] JDK が見つかりません。
-echo         インストールしたくない場合は、ポータブル JDK の zip を展開して
-echo         次のいずれかに置いてください（インストーラ不要・フォルダ削除で撤去できます）。
+echo [ERROR] No JDK found.
 echo.
-echo           C:\tools\jdk\bin\javac.exe
-echo           %~dp0..\jdk\bin\javac.exe
+echo   If you do not want to install one, extract a portable JDK (.zip) to
+echo   one of these locations - no installer, no registry, delete to remove:
 echo.
-echo         または、実行するコマンドプロンプトで JAVA_HOME を指定してください。
-echo           set "JAVA_HOME=C:\tools\jdk"
+echo       C:\tools\jdk\bin\javac.exe
+echo       %~dp0..\jdk\bin\javac.exe
 echo.
-echo         zip 版の入手先: https://adoptium.net/temurin/releases/
-echo           OS=Windows / Architecture=x64 / Package Type=JDK / 拡張子 .zip を選択
+echo   Or point JAVA_HOME at it in this command prompt:
+echo       set "JAVA_HOME=C:\tools\jdk"
+echo.
+echo   Download: https://adoptium.net/temurin/releases/
+echo       OS=Windows, Architecture=x64, Package Type=JDK, file type .zip
 exit /b 1
 
 :found

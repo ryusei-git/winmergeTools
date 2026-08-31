@@ -51,7 +51,7 @@ report/
 
 ## 実行方法（Windows）
 
-同梱の `run.bat` を使うのが確実です（UTF-8 でコンパイルし、コンソールも UTF-8 にします）。
+同梱の `run.bat` を使うのが確実です（`javac -encoding UTF-8` でコンパイルします）。
 カレントディレクトリは呼び出し元のままなので、比較したい場所へ `cd` してから実行してください。
 
 ```bat
@@ -226,7 +226,16 @@ WinMerge も Java もファイルを作れないため、`--max-path`（既定 2
 
 ソースは UTF-8 です。JDK 17 以前で `java WinMergeReportTool.java` を直接実行すると日本語が
 壊れるため、`run.bat` か `javac -encoding UTF-8` を使ってください。
-WinMerge の標準出力は `native.encoding`（日本語 Windows なら windows-31j）で読み取ります。
+
+一方、**バッチファイル（`.bat`）は ASCII のみ**で書いています。cmd.exe はバッチをバイト位置で
+読み進めるため、`chcp 65001` とマルチバイト文字が混在すると行の切れ目がずれ、途中から
+壊れたコマンドとして実行されてしまうためです。日本語のメッセージは Java 側が出力します。
+`.bat` は CRLF 改行である必要もあるため、`.gitattributes` で `eol=crlf` を強制しています。
+
+実行時に文字コードを指定しないのも意図的です。Java はコンソール自身のコードページで出力するため、
+`-Dfile.encoding=UTF-8` を付けない方が日本語が正しく表示されます。ファイル入出力は
+コード内で文字コードを明示しているので影響を受けません（WinMerge の標準出力は
+`native.encoding`、HTML/xlsx は UTF-8、VBScript は UTF-16LE）。
 
 ### 4. その他
 
