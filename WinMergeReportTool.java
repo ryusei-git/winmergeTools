@@ -342,6 +342,14 @@ public final class WinMergeReportTool {
             return 1;
         }
 
+        // Guard against --report pointing at (or above) the data being compared: --clean would
+        // otherwise delete the test cases themselves.
+        if (cfg.root.equals(cfg.reportRoot) || cfg.root.startsWith(cfg.reportRoot)) {
+            System.err.println("[ERROR] レポート出力先が比較対象を含んでいます。別の場所を指定してください。");
+            System.err.println("        比較対象: " + cfg.root);
+            System.err.println("        出力先  : " + cfg.reportRoot);
+            return 1;
+        }
         if (cfg.cleanReport && Files.exists(cfg.reportRoot)) {
             System.out.println("[INFO] 既存の report フォルダを削除します: " + cfg.reportRoot);
             deleteRecursively(cfg.reportRoot);
@@ -603,7 +611,24 @@ public final class WinMergeReportTool {
 
             // --- ファイル比較 ---
             Path fileOutDir = outDir.resolve("files");
-            for (String rel : listRelativeFiles(leftDir, rightDir)) {
+            Set<String> files;
+            try {
+                files = listRelativeFiles(leftDir, rightDir);
+            } catch (IOException | UncheckedIOException e) {
+                // An unreadable subdirectory must fail this pair only, not the whole run.
+                CompareResult r = new CompareResult();
+                r.kind = "ファイル比較";
+                r.pairLabel = pair.label;
+                r.name = "(一覧の取得)";
+                r.left = leftDir;
+                r.right = rightDir;
+                r.status = Status.ERROR;
+                r.message = "ファイル一覧を取得できません: " + e.getMessage();
+                tc.results.add(r);
+                System.out.println("     [NG] " + pair.label + " : " + r.message);
+                continue;
+            }
+            for (String rel : files) {
                 tc.results.add(runFileCompare(pair, leftDir, rightDir, fileOutDir, rel));
             }
         }
@@ -624,7 +649,7 @@ public final class WinMergeReportTool {
         ExecResult ex = exec(cmd);
         applyExitCode(r, ex);
         System.out.println("     [" + statusMark(r.status) + "] " + pair.label + " フォルダ比較 -> "
-                + cfg.reportRoot.relativize(r.report));
+                + reportLabel(r));
         return r;
     }
 
@@ -657,7 +682,7 @@ public final class WinMergeReportTool {
         ExecResult ex = exec(cmd);
         applyExitCode(r, ex);
         System.out.println("     [" + statusMark(r.status) + "] " + pair.label + " " + rel + " -> "
-                + cfg.reportRoot.relativize(r.report));
+                + reportLabel(r));
         return r;
     }
 
@@ -681,6 +706,17 @@ public final class WinMergeReportTool {
             leaf = leaf.substring(0, room);
         }
         return fileOutDir.resolve(leaf + "_" + hash + ".html");
+    }
+
+    /**
+     * Progress label for one comparison. applyExitCode() clears CompareResult.report when
+     * WinMerge produced no HTML, so this must tolerate null instead of relativizing it.
+     */
+    private String reportLabel(CompareResult r) {
+        if (r.report == null) {
+            return r.message.isEmpty() ? "(no report)" : "(no report: " + r.message + ")";
+        }
+        return cfg.reportRoot.relativize(r.report).toString();
     }
 
     private static String statusMark(Status s) {
@@ -801,7 +837,9 @@ public final class WinMergeReportTool {
                 }
                 return b.read() < 0;
             }
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
+            // Files.walk reports an unreadable subdirectory as UncheckedIOException; treat any
+            // traversal failure as "not equal" rather than aborting the whole run.
             return false;
         }
     }
@@ -836,11 +874,18 @@ public final class WinMergeReportTool {
     }
 
     private ExecResult exec(List<String> cmd) throws IOException, InterruptedException {
+        return exec(cmd, cfg.timeoutSec);
+    }
+
+    private ExecResult exec(List<String> cmd, long timeoutSec) throws IOException, InterruptedException {
         ExecResult res = new ExecResult();
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         Process proc = pb.start();
-        StringBuilder sb = new StringBuilder();
+        // StringBuffer, not StringBuilder: the reader thread keeps appending if join() below
+        // times out (a grandchild process can hold the inherited pipe open), while this thread
+        // reads it. Unsynchronized access would corrupt or truncate the diagnostics.
+        StringBuffer sb = new StringBuffer();
         Thread reader = new Thread(() -> {
             try (InputStream in = proc.getInputStream()) {
                 byte[] buf = new byte[4096];
@@ -855,7 +900,7 @@ public final class WinMergeReportTool {
         reader.setDaemon(true);
         reader.start();
 
-        if (!proc.waitFor(cfg.timeoutSec, TimeUnit.SECONDS)) {
+        if (!proc.waitFor(timeoutSec, TimeUnit.SECONDS)) {
             proc.destroyForcibly();
             proc.waitFor();
             res.timedOut = true;
@@ -932,8 +977,9 @@ public final class WinMergeReportTool {
 
         if ("image".equals(cfg.excelMode)) {
             try {
-                writeXlsxWithImages();
-                System.out.println("[INFO] Excel ブックを作成しました（画像貼り付け）: " + cfg.excelPath);
+                boolean pasted = writeXlsxWithImages();
+                System.out.println("[INFO] Excel ブックを作成しました（"
+                        + (pasted ? "画像貼り付け" : "xlsx 直接生成") + "）: " + cfg.excelPath);
             } catch (IOException | InterruptedException e) {
                 System.err.println("[ERROR] 画像貼り付け版の生成に失敗しました: " + e.getMessage());
             }
@@ -1020,6 +1066,9 @@ public final class WinMergeReportTool {
         // ブラウザのプロファイルはレポートに混ざらないよう一時ディレクトリへ置く
         Path profile = Paths.get(System.getProperty("java.io.tmpdir"), "winmerge_report_browser");
         Files.createDirectories(png.getParent());
+        // Drop any PNG from an earlier run: without --clean a failed capture would otherwise
+        // look like a success and the stale image would be embedded again.
+        Files.deleteIfExists(png);
 
         List<String> cmd = new ArrayList<>(List.of(
                 browser,
@@ -1037,8 +1086,8 @@ public final class WinMergeReportTool {
         if (!isWindows()) {
             cmd.add(3, "--no-sandbox");
         }
-        ExecResult ex = exec(cmd);
-        if (!Files.isRegularFile(png) || Files.size(png) == 0) {
+        ExecResult ex = exec(cmd, cfg.timeoutSec);
+        if (!Files.isRegularFile(png) || Files.size(png) == 0 || pngSize(png) == null) {
             System.err.println("[WARN] PNG 化に失敗しました: " + html.getFileName()
                     + " (exit=" + ex.exitCode + ") " + ex.output.trim());
             return false;
@@ -1079,7 +1128,11 @@ public final class WinMergeReportTool {
         System.arraycopy(body, 0, withBom, 2, body.length);
         Files.write(vbs, withBom);
 
-        ExecResult ex = exec(List.of("cscript", "//nologo", "//B", vbs.toString()));
+        // One cscript run builds the whole workbook, so the per-comparison timeout is far too
+        // short. Killing it midway also orphans an invisible EXCEL.EXE (xl.Quit never runs),
+        // so allow generous time and scale it with the number of reports to paste.
+        long comTimeout = Math.max(cfg.timeoutSec, 60L + 20L * countReports());
+        ExecResult ex = exec(List.of("cscript", "//nologo", "//B", vbs.toString()), comTimeout);
         boolean created = Files.isRegularFile(cfg.excelPath);
         if (created && !ex.timedOut && ex.exitCode == 0) {
             if (!ex.output.isBlank()) {
@@ -1113,6 +1166,18 @@ public final class WinMergeReportTool {
      * そのため各操作の直後に Report で内容を退避し、最後はブックが実際に保存されたか
      * どうかで成否を判定する。診断内容は標準エラーとログファイルの両方へ出す。
      */
+    private int countReports() {
+        int n = 0;
+        for (TestCase tc : testCases) {
+            for (CompareResult r : tc.results) {
+                if (r.report != null) {
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
     private String buildVbScript(Path logFile) {
         StringBuilder sb = new StringBuilder();
         sb.append("Option Explicit\r\n")
@@ -1364,13 +1429,13 @@ public final class WinMergeReportTool {
      * HTML レポートを PNG 化し、画像としてシートへ貼り付けた xlsx を作る。
      * Excel のインストールは不要（画像パーツを直接書き込む）。
      */
-    private void writeXlsxWithImages() throws IOException, InterruptedException {
+    private boolean writeXlsxWithImages() throws IOException, InterruptedException {
         String browser = resolveBrowser();
         if (browser == null) {
             System.err.println("[WARN] PNG 化に使えるブラウザ（Edge / Chrome）が見つかりません。");
             System.err.println("       --browser で msedge.exe のパスを指定してください。テキスト展開版を生成します。");
             writeXlsx();
-            return;
+            return false;
         }
         System.out.println("[INFO] PNG 化に使用するブラウザ: " + browser);
 
@@ -1423,6 +1488,7 @@ public final class WinMergeReportTool {
         writeXlsxFile(cfg.excelPath, sheets);
         System.out.println("[INFO] 画像 " + done + " 枚を貼り付けました"
                 + (failed > 0 ? "（失敗 " + failed + " 枚）" : "") + " / 画像の保存先: " + imageDir);
+        return true;
     }
 
     /** サマリシートは画像版・テキスト版で共通。 */
