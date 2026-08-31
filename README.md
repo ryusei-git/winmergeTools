@@ -100,6 +100,10 @@ Excel ブックは `サマリ`（Summary）シート＋テストケース名の�
 rem 見た目重視。Excel が無くても動く
 java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode image
 
+rem 画像の枠線を変える（既定は黒 1pt）
+java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode image --image-border FF0000 --image-border-width 2
+java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode image --image-border none
+
 rem Excel で開いて中身を検索・コピーしたい
 java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode com
 
@@ -107,7 +111,7 @@ rem 何も追加要件なしで確実に出したい
 java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode xlsx
 ```
 
-- `image`: HTML を Edge のヘッドレスモードで PNG 化して埋め込みます。PNG は `report\_images\` にも残ります。高さはレポートの行数から見積もるため、極端に長い差分は下端が切れることがあります（そのときはシート内のリンクから元 HTML へ）。
+- `image`: HTML を Edge のヘッドレスモードで PNG 化して埋め込みます。PNG は `report\_images\` にも残ります。高さはレポートの行数から見積もるため、極端に長い差分は下端が切れることがあります（そのときはシート内のリンクから元 HTML へ）。貼り付けた画像には既定で **黒 1pt の枠線**が付きます（`--image-border` / `--image-border-width` で変更、`--image-border none` で無効化）。
 - `com`: 生成した VBScript を `cscript` で実行して Excel を操作します。失敗した場合は `report\_build_excel.vbs` と `report\_build_excel.log` に原因が残ります。
 - `xlsx`: HTML の表を解析してセルに展開し、元 HTML へのハイパーリンクを張ります。
 
@@ -126,6 +130,8 @@ java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode xlsx
 | `--browser <exe>` | 自動探索 | PNG 化に使う Edge/Chrome |
 | `--image-width <px>` | `1600` | PNG の横幅 |
 | `--image-max-height <px>` | `16000` | PNG の高さ上限 |
+| `--image-border <rgb>` | `000000`（黒） | 画像の枠線色。`RRGGBB` 指定。`none` で枠線なし |
+| `--image-border-width <pt>` | `1` | 枠線の太さ（ポイント） |
 | `--timeout <sec>` | `180` | WinMerge 1 回あたりのタイムアウト |
 | `--max-rows <n>` | `500` | xlsx へ展開する 1 レポートの最大行数 |
 | `--max-path <n>` | `240` | レポートパスの上限文字数 |
