@@ -137,6 +137,8 @@ public final class WinMergeReportTool {
         String browser;                  // Edge/Chrome used for screenshots (image mode only)
         int imageWidth = 1600;           // capture width in px
         int imageMaxHeight = 16000;      // capture height cap in px; PNGs beyond this get clipped
+        String imageBorder = "000000";   // RRGGBB outline drawn around each embedded picture; "" for none
+        int imageBorderWidthPt = 1;      // outline thickness in points
         int maxTableRows = 500;          // rows expanded into cells per report, to bound sheet size
         boolean cleanReport = false;     // delete the report folder before running
         boolean enableExitCode = true;   // pass /enableexitcode; false for WinMerge before 2.16
@@ -239,6 +241,9 @@ public final class WinMergeReportTool {
                 "  --browser <exe>     Edge/Chrome used for PNG capture (default: auto-detect)",
                 "  --image-width <px>  capture width (default: 1600)",
                 "  --image-max-height <px> capture height cap (default: 16000)",
+                "  --image-border <rgb> outline colour around each picture as RRGGBB,",
+                "                      or none to draw no outline (default: 000000, black)",
+                "  --image-border-width <pt> outline thickness in points (default: 1)",
                 "  --timeout <sec>     timeout per WinMerge run (default: 180)",
                 "  --max-rows <n>      max rows expanded into cells per report (default: 500)",
                 "  --clean             delete the report directory before running",
@@ -294,6 +299,22 @@ public final class WinMergeReportTool {
                     break;
                 case "--image-max-height":
                     cfg.imageMaxHeight = (int) parseLong(next(args, ++i, a), a);
+                    break;
+                case "--image-border": {
+                    String v = next(args, ++i, a).trim();
+                    if ("none".equalsIgnoreCase(v)) {
+                        cfg.imageBorder = "";
+                    } else {
+                        String hex = v.startsWith("#") ? v.substring(1) : v;
+                        if (!hex.matches("(?i)[0-9a-f]{6}")) {
+                            throw new UsageException("--image-border must be RRGGBB or none: " + v);
+                        }
+                        cfg.imageBorder = hex.toUpperCase(Locale.ROOT);
+                    }
+                    break;
+                }
+                case "--image-border-width":
+                    cfg.imageBorderWidthPt = (int) parseLong(next(args, ++i, a), a);
                     break;
                 case "--timeout":
                     cfg.timeoutSec = parseLong(next(args, ++i, a), a);
@@ -1457,12 +1478,16 @@ public final class WinMergeReportTool {
         final int anchorRow;   // zero-based row the picture is anchored to
         final int widthPx;
         final int heightPx;
+        final String borderRgb;   // RRGGBB outline, or empty for no outline
+        final int borderWidthPt;
 
-        ImageRef(Path png, int anchorRow, int widthPx, int heightPx) {
+        ImageRef(Path png, int anchorRow, int widthPx, int heightPx, String borderRgb, int borderWidthPt) {
             this.png = png;
             this.anchorRow = anchorRow;
             this.widthPx = widthPx;
             this.heightPx = heightPx;
+            this.borderRgb = borderRgb;
+            this.borderWidthPt = borderWidthPt;
         }
     }
 
@@ -1535,7 +1560,8 @@ public final class WinMergeReportTool {
                     int[] size = pngSize(png);
                     int w = size == null ? cfg.imageWidth : size[0];
                     int h = size == null ? 600 : size[1];
-                    sd.images.add(new ImageRef(png, sd.rows.size(), w, h));
+                    sd.images.add(new ImageRef(png, sd.rows.size(), w, h,
+                            cfg.imageBorder, cfg.imageBorderWidthPt));
                     // Advance past the picture. A one-cell anchor does not reserve space, so
                     // without these blank rows the next heading would sit under the image.
                     int rowsNeeded = (int) Math.ceil(h / 20.0);
@@ -1801,7 +1827,15 @@ public final class WinMergeReportTool {
               .append(k + 1).append("\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>")
               .append("<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"").append(cx)
               .append("\" cy=\"").append(cy).append("\"/></a:xfrm>")
-              .append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr>")
+              .append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>");
+            if (img.borderRgb != null && !img.borderRgb.isEmpty()) {
+                // Outline. In CT_ShapeProperties <a:ln> must follow the geometry, and its width
+                // is in EMU: 1pt is 12700 EMU.
+                sb.append("<a:ln w=\"").append(Math.max(1, img.borderWidthPt) * 12700)
+                  .append("\"><a:solidFill><a:srgbClr val=\"").append(img.borderRgb)
+                  .append("\"/></a:solidFill></a:ln>");
+            }
+            sb.append("</xdr:spPr>")
               .append("</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>");
         }
         sb.append("</xdr:wsDr>");
