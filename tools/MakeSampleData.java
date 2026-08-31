@@ -28,8 +28,11 @@ import java.util.stream.Stream;
  *   java -cp %TEMP%\wmrt MakeSampleData --dest D:\tests\sample --clean
  * </pre>
  *
- * <p>Comments are English because the source is UTF-8 and JDK 17 and older default the source
- * encoding to the platform charset; see WinMergeReportTool for the full rationale.
+ * <p>This file is pure ASCII, so it compiles identically whatever -encoding is in effect.
+ * The Japanese file name and Shift_JIS contents in TC002 are the point of that test case -
+ * the tool has to handle both - so they are kept as \\uXXXX escapes rather than removed.
+ * Decode them with any Unicode table if you need to read them; do not paste raw Japanese back
+ * in. See WinMergeReportTool for the full encoding rationale.
  */
 public final class MakeSampleData {
 
@@ -45,7 +48,7 @@ public final class MakeSampleData {
             switch (args[i]) {
                 case "--dest":
                     if (++i >= args.length) {
-                        System.err.println("[ERROR] --dest には値が必要です");
+                        System.err.println("[ERROR] --dest requires a value");
                         System.exit(2);
                     }
                     dest = Paths.get(args[i]).toAbsolutePath().normalize();
@@ -55,46 +58,46 @@ public final class MakeSampleData {
                     break;
                 case "--help":
                 case "-h":
-                    System.out.println("使い方: java MakeSampleData [--dest <dir>] [--clean]");
+                    System.out.println("Usage: java MakeSampleData [--dest <dir>] [--clean]");
                     return;
                 default:
-                    System.err.println("[ERROR] 不明なオプション: " + args[i]);
+                    System.err.println("[ERROR] Unknown option: " + args[i]);
                     System.exit(2);
             }
         }
 
         if (clean && Files.exists(dest)) {
-            System.out.println("[INFO] 既存のサンプルを削除します: " + dest);
+            System.out.println("[INFO] Deleting the existing sample: " + dest);
             deleteRecursively(dest);
         }
         Files.createDirectories(dest);
 
-        makeIdentical(dest.resolve("TC001_一致"));
-        makeDifferent(dest.resolve("TC002_差分あり"));
-        makeOneSided(dest.resolve("TC003_片側のみ"));
-        makeMissingPairDir(dest.resolve("TC004_LOG_COMPAREなし"));
-        makeIdentical(dest.resolve("nested").resolve("TC005_入れ子"));
+        makeIdentical(dest.resolve("TC001_identical"));
+        makeDifferent(dest.resolve("TC002_different"));
+        makeOneSided(dest.resolve("TC003_one_sided"));
+        makeMissingPairDir(dest.resolve("TC004_no_log_compare"));
+        makeIdentical(dest.resolve("nested").resolve("TC005_nested"));
         // Introduce one difference in the nested case so its detection is visible in the report.
-        write(dest.resolve("nested/TC005_入れ子/OUTPUT/data.csv"),
+        write(dest.resolve("nested/TC005_nested/OUTPUT/data.csv"),
                 csv("3,gamma"), StandardCharsets.UTF_8);
 
-        System.out.println("[INFO] サンプルデータを作成しました: " + dest);
+        System.out.println("[INFO] Sample data created: " + dest);
         System.out.println();
-        System.out.println("  TC001_一致             全て一致になるはず");
-        System.out.println("  TC002_差分あり         data.csv / 日本語ファイル名.txt / sjis_log.txt / app.log が差分");
-        System.out.println("  TC003_片側のみ         only_in_input.txt=左のみ, only_in_output.txt=右のみ, LOG は左のみ");
-        System.out.println("  TC004_LOG_COMPAREなし  LOG ペアがエラーとして記録されるはず");
-        System.out.println("  nested/TC005_入れ子    入れ子でも検出され、data.csv が差分になるはず");
+        System.out.println("  TC001_identical       everything identical");
+        System.out.println("  TC002_different       data.csv, the Japanese-named file, sjis_log.txt and app.log differ");
+        System.out.println("  TC003_one_sided       only_in_input.txt left only, only_in_output.txt right only");
+        System.out.println("  TC004_no_log_compare  the LOG pair is recorded as an error");
+        System.out.println("  nested/TC005_nested   found despite nesting; data.csv differs");
     }
 
     /** Test case where both pairs match exactly. */
     private static void makeIdentical(Path tc) throws IOException {
         for (String dir : new String[]{"INPUT", "OUTPUT"}) {
             write(tc.resolve(dir).resolve("data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
-            write(tc.resolve(dir).resolve("sub/note.txt"), "サブフォルダ内のファイルです。" + NL, StandardCharsets.UTF_8);
+            write(tc.resolve(dir).resolve("sub/note.txt"), "\u30b5\u30d6\u30d5\u30a9\u30eb\u30c0\u5185\u306e\u30d5\u30a1\u30a4\u30eb\u3067\u3059\u3002" + NL, StandardCharsets.UTF_8);
         }
         for (String dir : new String[]{"LOG", "LOG_COMPARE"}) {
-            write(tc.resolve(dir).resolve("app.log"), log("処理を終了しました"), StandardCharsets.UTF_8);
+            write(tc.resolve(dir).resolve("app.log"), log("\u51e6\u7406\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f"), StandardCharsets.UTF_8);
         }
     }
 
@@ -103,30 +106,30 @@ public final class MakeSampleData {
         write(tc.resolve("INPUT/data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
         write(tc.resolve("OUTPUT/data.csv"), csv("2,BETA"), StandardCharsets.UTF_8);
 
-        write(tc.resolve("INPUT/日本語ファイル名.txt"),
-                "1行目：変更なし" + NL + "2行目：変更前" + NL, StandardCharsets.UTF_8);
-        write(tc.resolve("OUTPUT/日本語ファイル名.txt"),
-                "1行目：変更なし" + NL + "2行目：変更後" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("INPUT/\u65e5\u672c\u8a9e\u30d5\u30a1\u30a4\u30eb\u540d.txt"),
+                "1\u884c\u76ee\uff1a\u5909\u66f4\u306a\u3057" + NL + "2\u884c\u76ee\uff1a\u5909\u66f4\u524d" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("OUTPUT/\u65e5\u672c\u8a9e\u30d5\u30a1\u30a4\u30eb\u540d.txt"),
+                "1\u884c\u76ee\uff1a\u5909\u66f4\u306a\u3057" + NL + "2\u884c\u76ee\uff1a\u5909\u66f4\u5f8c" + NL, StandardCharsets.UTF_8);
 
         // Shift_JIS file: checks that WinMerge detects the encoding rather than us.
-        write(tc.resolve("INPUT/sjis_log.txt"), log("シフトJISのログです"), SJIS);
-        write(tc.resolve("OUTPUT/sjis_log.txt"), log("シフトJISのログです（変更後）"), SJIS);
+        write(tc.resolve("INPUT/sjis_log.txt"), log("\u30b7\u30d5\u30c8JIS\u306e\u30ed\u30b0\u3067\u3059"), SJIS);
+        write(tc.resolve("OUTPUT/sjis_log.txt"), log("\u30b7\u30d5\u30c8JIS\u306e\u30ed\u30b0\u3067\u3059\uff08\u5909\u66f4\u5f8c\uff09"), SJIS);
 
-        write(tc.resolve("INPUT/sub/note.txt"), "サブフォルダ内のファイルです。" + NL, StandardCharsets.UTF_8);
-        write(tc.resolve("OUTPUT/sub/note.txt"), "サブフォルダ内のファイルです（変更後）。" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("INPUT/sub/note.txt"), "\u30b5\u30d6\u30d5\u30a9\u30eb\u30c0\u5185\u306e\u30d5\u30a1\u30a4\u30eb\u3067\u3059\u3002" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("OUTPUT/sub/note.txt"), "\u30b5\u30d6\u30d5\u30a9\u30eb\u30c0\u5185\u306e\u30d5\u30a1\u30a4\u30eb\u3067\u3059\uff08\u5909\u66f4\u5f8c\uff09\u3002" + NL, StandardCharsets.UTF_8);
 
-        write(tc.resolve("LOG/app.log"), log("処理を終了しました"), StandardCharsets.UTF_8);
-        write(tc.resolve("LOG_COMPARE/app.log"), log("処理を終了しました（想定値）"), StandardCharsets.UTF_8);
+        write(tc.resolve("LOG/app.log"), log("\u51e6\u7406\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f"), StandardCharsets.UTF_8);
+        write(tc.resolve("LOG_COMPARE/app.log"), log("\u51e6\u7406\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f\uff08\u60f3\u5b9a\u5024\uff09"), StandardCharsets.UTF_8);
     }
 
     /** Test case with one-sided files and an empty LOG_COMPARE directory. */
     private static void makeOneSided(Path tc) throws IOException {
-        write(tc.resolve("INPUT/common.txt"), "両方にあるファイル" + NL, StandardCharsets.UTF_8);
-        write(tc.resolve("OUTPUT/common.txt"), "両方にあるファイル" + NL, StandardCharsets.UTF_8);
-        write(tc.resolve("INPUT/only_in_input.txt"), "INPUT にしかないファイル" + NL, StandardCharsets.UTF_8);
-        write(tc.resolve("OUTPUT/only_in_output.txt"), "OUTPUT にしかないファイル" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("INPUT/common.txt"), "\u4e21\u65b9\u306b\u3042\u308b\u30d5\u30a1\u30a4\u30eb" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("OUTPUT/common.txt"), "\u4e21\u65b9\u306b\u3042\u308b\u30d5\u30a1\u30a4\u30eb" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("INPUT/only_in_input.txt"), "INPUT \u306b\u3057\u304b\u306a\u3044\u30d5\u30a1\u30a4\u30eb" + NL, StandardCharsets.UTF_8);
+        write(tc.resolve("OUTPUT/only_in_output.txt"), "OUTPUT \u306b\u3057\u304b\u306a\u3044\u30d5\u30a1\u30a4\u30eb" + NL, StandardCharsets.UTF_8);
 
-        write(tc.resolve("LOG/app.log"), log("処理を終了しました"), StandardCharsets.UTF_8);
+        write(tc.resolve("LOG/app.log"), log("\u51e6\u7406\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f"), StandardCharsets.UTF_8);
         Files.createDirectories(tc.resolve("LOG_COMPARE")); // intentionally left empty
     }
 
@@ -134,7 +137,7 @@ public final class MakeSampleData {
     private static void makeMissingPairDir(Path tc) throws IOException {
         write(tc.resolve("INPUT/data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
         write(tc.resolve("OUTPUT/data.csv"), csv("2,beta"), StandardCharsets.UTF_8);
-        write(tc.resolve("LOG/app.log"), log("処理を終了しました"), StandardCharsets.UTF_8);
+        write(tc.resolve("LOG/app.log"), log("\u51e6\u7406\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f"), StandardCharsets.UTF_8);
         // LOG_COMPARE is deliberately not created.
     }
 
@@ -143,8 +146,8 @@ public final class MakeSampleData {
     }
 
     private static String log(String lastLine) {
-        return "2026-08-31 10:00:00 INFO  処理を開始しました" + NL
-                + "2026-08-31 10:00:01 DEBUG レコード件数: 2" + NL
+        return "2026-08-31 10:00:00 INFO  \u51e6\u7406\u3092\u958b\u59cb\u3057\u307e\u3057\u305f" + NL
+                + "2026-08-31 10:00:01 DEBUG \u30ec\u30b3\u30fc\u30c9\u4ef6\u6570: 2" + NL
                 + "2026-08-31 10:00:02 INFO  " + lastLine + NL;
     }
 
