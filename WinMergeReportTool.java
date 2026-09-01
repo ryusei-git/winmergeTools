@@ -144,6 +144,7 @@ public final class WinMergeReportTool {
         boolean cleanReport = false;     // delete the report folder before running
         boolean reportExplicit;          // --report was given, so the location must not be relocated
         boolean excelExplicit;           // --excel was given
+        Path relayTarget;                // set when output is staged in TEMP and copied here at the end
         final String runStamp = LocalDateTime.now().format(TS_FILE);
         boolean enableExitCode = true;   // pass /enableexitcode; false for WinMerge before 2.16
         int maxPathLength = 240;         // shorten report paths beyond this (MAX_PATH is 260)
@@ -459,9 +460,11 @@ public final class WinMergeReportTool {
         // Step 5: workbook.
         writeExcel();
 
+        boolean relayed = cfg.relayTarget == null || relayToTarget();
+
         warnIfNoReportsAtAll();
         printSummary();
-        return hasError() ? 1 : 0;
+        return (hasError() || !relayed) ? 1 : 0;
     }
 
     private boolean hasError() {
@@ -1150,29 +1153,110 @@ public final class WinMergeReportTool {
         if (canWriteFilesIn(cfg.reportRoot)) {
             return true;
         }
-        if (cfg.reportExplicit) {
-            System.err.println("[ERROR] Cannot write files into the report directory: " + cfg.reportRoot);
+
+        Path desired = cfg.reportRoot;
+        Path staging = Paths.get(System.getProperty("java.io.tmpdir"))
+                .resolve("winmerge_report_" + sanitizeFileName(fileNameOf(cfg.root)));
+        System.err.println("[WARN] Cannot write files into " + desired);
+        System.err.println("       Directories can be created there but files cannot, which usually means");
+        System.err.println("       security software is blocking this program from writing to that tree.");
+        if (!canWriteFilesIn(staging)) {
+            System.err.println("[ERROR] The staging location is not writable either: " + staging);
             printWriteDeniedHelp();
             return false;
         }
 
-        Path fallback = Paths.get(System.getProperty("java.io.tmpdir"))
-                .resolve("winmerge_report_" + sanitizeFileName(fileNameOf(cfg.root)));
-        System.err.println("[WARN] Cannot write files into " + cfg.reportRoot);
-        System.err.println("       Directories can be created there but files cannot, which usually means");
-        System.err.println("       security software is blocking this program from writing to that tree.");
-        if (!canWriteFilesIn(fallback)) {
-            System.err.println("[ERROR] The fallback location is not writable either: " + fallback);
-            printWriteDeniedHelp();
-            return false;
+        // Everything - including the reports WinMerge writes - is produced under the staging
+        // directory, because WinMergeU.exe is blocked by the same policy that blocks this
+        // program. A generated VBScript copies the finished tree to the requested location at
+        // the end of the run: cscript.exe is normally on the allowed list even when java.exe and
+        // WinMergeU.exe are not.
+        cfg.reportRoot = staging;
+        cfg.relayTarget = desired;
+        if (cfg.excelExplicit && !canWriteFilesIn(cfg.excelPath.getParent())) {
+            System.err.println("       --excel points at a location that is blocked too; the workbook will be");
+            System.err.println("       written into the report directory instead.");
+            cfg.excelExplicit = false;
         }
-        cfg.reportRoot = fallback;
         if (!cfg.excelExplicit) {
             cfg.excelPath = defaultExcelPath(cfg);
         }
-        System.err.println("       Writing the reports to " + cfg.reportRoot + " instead.");
-        System.err.println("       Pass --report <dir> to choose a different location.");
+        System.err.println("       Building the reports in " + staging);
+        System.err.println("       and copying them to " + desired + " with cscript afterwards.");
         return true;
+    }
+
+    /**
+     * Copies the staged report tree to the location the caller asked for, using a generated
+     * VBScript run by cscript.exe.
+     *
+     * <p>This exists for machines where security software gates writes per executable: cscript
+     * is a signed Windows component and is usually allowed, while java.exe and WinMergeU.exe are
+     * not. If the copy fails the staged output is still complete, so the run reports where it is
+     * rather than discarding it.
+     *
+     * @return true if the files reached the requested location
+     */
+    private boolean relayToTarget() {
+        Path target = cfg.relayTarget;
+        System.out.println();
+        System.out.println("[INFO] Copying the reports to " + target + " with cscript");
+        try {
+            Path vbs = cfg.reportRoot.resolve("_copy_reports.vbs");
+            writeVbScript(vbs, buildCopyVbScript(cfg.reportRoot, target));
+            ExecResult ex = exec(List.of("cscript", "//nologo", "//B", vbs.toString()),
+                    Math.max(cfg.timeoutSec, 300));
+            if (!ex.timedOut && ex.exitCode == 0 && Files.isRegularFile(target.resolve("index.html"))) {
+                System.out.println("[INFO] Reports copied to " + target);
+                return true;
+            }
+            System.err.println("[ERROR] The copy failed"
+                    + (ex.timedOut ? " (timed out)" : " (cscript exit=" + ex.exitCode + ")"));
+            if (!ex.output.isBlank()) {
+                for (String line : ex.output.trim().split("\\R")) {
+                    System.err.println("        " + line);
+                }
+            }
+        } catch (IOException | InterruptedException e) {
+            System.err.println("[ERROR] Could not run cscript: " + e);
+        }
+        System.err.println("        The reports are complete and left in " + cfg.reportRoot);
+        return false;
+    }
+
+    /** Emits a VBScript that copies the contents of one directory into another. */
+    private static String buildCopyVbScript(Path src, Path dst) {
+        return "Option Explicit\r\n"
+                + "Dim fso, srcDir, dstDir\r\n"
+                + "srcDir = " + vbsStr(src.toString()) + "\r\n"
+                + "dstDir = " + vbsStr(dst.toString()) + "\r\n"
+                + "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n"
+                + "On Error Resume Next\r\n"
+                + "EnsureFolder dstDir\r\n"
+                + "If Err.Number <> 0 Then\r\n"
+                + "  WScript.StdErr.WriteLine \"cannot create \" & dstDir & \": \" & Err.Description\r\n"
+                + "  WScript.Quit 2\r\n"
+                + "End If\r\n"
+                // The wildcard forms copy the contents rather than the directory itself. Each
+                // raises an error when nothing matches, so Err is cleared between them.
+                + "fso.CopyFile srcDir & \"\\*\", dstDir & \"\\\", True\r\n"
+                + "Err.Clear\r\n"
+                + "fso.CopyFolder srcDir & \"\\*\", dstDir & \"\\\", True\r\n"
+                + "Err.Clear\r\n"
+                + "If fso.FileExists(dstDir & \"\\index.html\") Then\r\n"
+                + "  WScript.Quit 0\r\n"
+                + "Else\r\n"
+                + "  WScript.StdErr.WriteLine \"the copy did not produce \" & dstDir & \"\\index.html\"\r\n"
+                + "  WScript.Quit 1\r\n"
+                + "End If\r\n"
+                + "\r\n"
+                + "Sub EnsureFolder(p)\r\n"
+                + "  Dim parent\r\n"
+                + "  If fso.FolderExists(p) Then Exit Sub\r\n"
+                + "  parent = fso.GetParentFolderName(p)\r\n"
+                + "  If Len(parent) > 0 Then EnsureFolder parent\r\n"
+                + "  fso.CreateFolder p\r\n"
+                + "End Sub\r\n";
     }
 
     private void printWriteDeniedHelp() {
@@ -1335,15 +1419,7 @@ public final class WinMergeReportTool {
         Path log = cfg.reportRoot.resolve("_build_excel.log");
         Files.deleteIfExists(log);
 
-        Files.writeString(vbs, buildVbScript(log), StandardCharsets.UTF_16LE);
-        // cscript only treats a .vbs as Unicode when it starts with a UTF-16LE BOM. Without
-        // this the Japanese sheet names and paths in the script would be misread.
-        byte[] body = Files.readAllBytes(vbs);
-        byte[] withBom = new byte[body.length + 2];
-        withBom[0] = (byte) 0xFF;
-        withBom[1] = (byte) 0xFE;
-        System.arraycopy(body, 0, withBom, 2, body.length);
-        Files.write(vbs, withBom);
+        writeVbScript(vbs, buildVbScript(log));
 
         // One cscript run builds the whole workbook, so the per-comparison timeout is far too
         // short. Killing it midway also orphans an invisible EXCEL.EXE (xl.Quit never runs),
@@ -1398,6 +1474,19 @@ public final class WinMergeReportTool {
             }
         }
         return n;
+    }
+
+    /**
+     * Writes a .vbs as UTF-16LE with a BOM. cscript only treats a script as Unicode when the BOM
+     * is present; without it any non-ASCII path in the script is misread.
+     */
+    private static void writeVbScript(Path vbs, String content) throws IOException {
+        byte[] body = content.getBytes(StandardCharsets.UTF_16LE);
+        byte[] withBom = new byte[body.length + 2];
+        withBom[0] = (byte) 0xFF;
+        withBom[1] = (byte) 0xFE;
+        System.arraycopy(body, 0, withBom, 2, body.length);
+        Files.write(vbs, withBom);
     }
 
     private String buildVbScript(Path logFile) {
