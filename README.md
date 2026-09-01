@@ -122,7 +122,7 @@ java -cp %TEMP%\wmrt WinMergeReportTool --excel-mode xlsx
 | オプション | 既定値 | 説明 |
 | --- | --- | --- |
 | `--root <dir>` | カレントディレクトリ | 比較対象のルート |
-| `--report <dir>` | `<root>\report` | レポート出力先 |
+| `--report <dir>` | `<root>\report` | レポート出力先。既定の場所に書けない場合は `%TEMP%` へ自動退避 |
 | `--excel <file>` | `<report>\comparison_report_<日時>.xlsx` | Excel の出力先 |
 | `--winmerge <exe>` | 自動探索 | `WinMergeU.exe` のパス |
 | `--pair <L>:<R>` | `INPUT:OUTPUT` と `LOG:LOG_COMPARE` | 比較する組。複数指定可 |
@@ -184,6 +184,33 @@ java -cp %TEMP%\wmrt WinMergeReportTool --winmerge-arg /cfg --winmerge-arg Setti
 ### パスが長いとレポートが作れない
 
 `report\<TC>\<比較名>\files\<相対パス>.html` は元のパスより必ず長くなり、Windows の 260 文字制限に当たります。`--max-path`（既定 240）を超える場合は自動的に短縮名へ切り替えますが、`--report` で浅い場所を指定するのが確実です。
+
+### アクセスが拒否される（セキュリティ製品によるブロック）
+
+`AccessDeniedException` が出る、あるいは全比較が `no report file was produced` になる場合、
+**実行ファイル単位で書き込みを遮断する仕組み**が働いています。フォルダの権限（ACL）が原因なら
+実行ファイルに関係なく拒否されるので、`cscript` や Excel は書けるのに `java.exe` と
+`WinMergeU.exe` だけ書けない、という状態がその典型です。
+
+- Microsoft Defender の「フォルダー アクセスの制御」（ランサムウェア対策）
+- 会社の EDR / DLP / AppLocker
+
+ツールはこれを検知して自動的に回避します。既定の出力先にファイルを作れない場合、
+`%TEMP%\winmerge_report_<対象フォルダ名>` へ出力先を切り替え、その旨を表示します。
+
+```
+[WARN] Cannot write files into D:\tests\report
+       Writing the reports to C:\Users\xxx\AppData\Local\Temp\winmerge_report_tests instead.
+```
+
+`--report` を明示指定した場合は勝手に移動せず、エラーにして止まります（指定と違う場所へ黙って
+書くほうが危険なため）。恒久対応するなら、次の 2 つを許可アプリに登録してください。
+
+- `<JDK>\bin\java.exe`
+- `C:\Program Files\WinMerge\WinMergeU.exe`
+
+Windows セキュリティ → ウイルスと脅威の防止 → ランサムウェアの防止 →
+フォルダー アクセスの制御 → 許可されたアプリ
 
 ### WinMerge を起動したまま実行しない
 
