@@ -142,6 +142,9 @@ public final class WinMergeReportTool {
         int imageBorderWidthPt = 1;      // outline thickness in points
         int maxTableRows = 500;          // rows expanded into cells per report, to bound sheet size
         boolean cleanReport = false;     // delete the report folder before running
+        boolean reportExplicit;          // --report was given, so the location must not be relocated
+        boolean excelExplicit;           // --excel was given
+        final String runStamp = LocalDateTime.now().format(TS_FILE);
         boolean enableExitCode = true;   // pass /enableexitcode; false for WinMerge before 2.16
         int maxPathLength = 240;         // shorten report paths beyond this (MAX_PATH is 260)
     }
@@ -270,9 +273,11 @@ public final class WinMergeReportTool {
                     break;
                 case "--report":
                     cfg.reportRoot = Paths.get(next(args, ++i, a)).toAbsolutePath().normalize();
+                    cfg.reportExplicit = true;
                     break;
                 case "--excel":
                     cfg.excelPath = Paths.get(next(args, ++i, a)).toAbsolutePath().normalize();
+                    cfg.excelExplicit = true;
                     break;
                 case "--winmerge":
                     cfg.winMerge = next(args, ++i, a);
@@ -348,10 +353,13 @@ public final class WinMergeReportTool {
             cfg.reportRoot = cfg.root.resolve("report");
         }
         if (cfg.excelPath == null) {
-            cfg.excelPath = cfg.reportRoot.resolve(
-                    "comparison_report_" + LocalDateTime.now().format(TS_FILE) + ".xlsx");
+            cfg.excelPath = defaultExcelPath(cfg);
         }
         return cfg;
+    }
+
+    private static Path defaultExcelPath(Config cfg) {
+        return cfg.reportRoot.resolve("comparison_report_" + cfg.runStamp + ".xlsx");
     }
 
     private static String next(String[] args, int i, String opt) {
@@ -407,6 +415,9 @@ public final class WinMergeReportTool {
             System.out.println("[INFO] Deleting the existing report directory: " + cfg.reportRoot);
             deleteRecursively(cfg.reportRoot);
         }
+        if (!ensureWritableReportRoot()) {
+            return 1;
+        }
         Files.createDirectories(cfg.reportRoot);
         if (isWindows() && cfg.reportRoot.toString().length() > 150) {
             System.err.println("[WARN] The report path is long and may exceed MAX_PATH (260): "
@@ -434,21 +445,53 @@ public final class WinMergeReportTool {
             processTestCase(tc);
         }
 
-        // Step 4: index of every comparison.
+        // Step 4: index of every comparison. A failure here must not lose the workbook, so it
+        // is reported and the run continues.
         Path index = cfg.reportRoot.resolve("index.html");
-        writeIndexHtml(index);
         System.out.println();
-        System.out.println("[INFO] Index: " + index);
+        try {
+            writeIndexHtml(index);
+            System.out.println("[INFO] Index: " + index);
+        } catch (IOException e) {
+            System.err.println("[ERROR] Could not write the index: " + e);
+        }
 
         // Step 5: workbook.
         writeExcel();
 
+        warnIfNoReportsAtAll();
         printSummary();
         return hasError() ? 1 : 0;
     }
 
     private boolean hasError() {
         return testCases.stream().flatMap(t -> t.results.stream()).anyMatch(r -> r.status == Status.ERROR);
+    }
+
+    /**
+     * When every comparison ran but produced no HTML, WinMerge could not write into the report
+     * tree. That is the same executable-level block ensureWritableReportRoot() guards against,
+     * except that this program passed its own probe while WinMergeU.exe did not.
+     */
+    private void warnIfNoReportsAtAll() {
+        int compared = 0;
+        int missing = 0;
+        for (TestCase tc : testCases) {
+            for (CompareResult r : tc.results) {
+                if (r.status == Status.SAME || r.status == Status.DIFF) {
+                    compared++;
+                    if (r.report == null) {
+                        missing++;
+                    }
+                }
+            }
+        }
+        if (compared > 0 && compared == missing) {
+            System.err.println();
+            System.err.println("[ERROR] WinMerge ran but wrote no report at all.");
+            System.err.println("        It is most likely blocked from writing into " + cfg.reportRoot);
+            printWriteDeniedHelp();
+        }
     }
 
     private void printSummary() {
@@ -566,19 +609,26 @@ public final class WinMergeReportTool {
     }
 
     /**
-     * Directories never walked: the report tree itself (mirroring it would recurse), VCS
-     * metadata, and Windows system folders such as $RECYCLE.BIN.
+     * Directories never walked: the report tree itself (mirroring it would recurse), the default
+     * report location under the root, VCS metadata, and Windows system folders such as
+     * $RECYCLE.BIN.
+     *
+     * <p>The default location is excluded even when --report points elsewhere. A previous run may
+     * have left a report tree there, and its mirrored INPUT/OUTPUT directories would otherwise be
+     * picked up as extra, empty test cases.
      */
     private boolean isExcludedDir(Path dir) {
-        try {
-            if (Files.isSameFile(dir, cfg.reportRoot)) {
+        for (Path excluded : new Path[]{cfg.reportRoot, cfg.root.resolve("report")}) {
+            if (dir.startsWith(excluded)) {
                 return true;
             }
-        } catch (IOException ignore) {
-            // reportRoot may not exist yet; fall through to the path-prefix check.
-        }
-        if (dir.startsWith(cfg.reportRoot)) {
-            return true;
+            try {
+                if (Files.isSameFile(dir, excluded)) {
+                    return true;
+                }
+            } catch (IOException ignore) {
+                // The directory may not exist; the prefix check above is the fallback.
+            }
         }
         String name = dir.getFileName() == null ? "" : dir.getFileName().toString();
         return name.equals(".git") || name.equals(".svn") || name.equals(".hg") || name.startsWith("$");
@@ -1080,6 +1130,94 @@ public final class WinMergeReportTool {
         } catch (IOException e) {
             System.err.println("[ERROR] Failed to write the xlsx: " + e.getMessage());
         }
+    }
+
+    /**
+     * Confirms the report directory can actually hold files, and moves it out of the way when it
+     * cannot.
+     *
+     * <p>Security software (Defender's controlled folder access, or a corporate EDR) can allow a
+     * directory to be created while denying an unapproved executable - java.exe and
+     * WinMergeU.exe here - from writing files into it. That failure used to surface only after
+     * every comparison had run, as "no report file was produced" for all of them followed by an
+     * AccessDeniedException on index.html. Probing first turns minutes of wasted work into one
+     * message, and relocating keeps the run useful.
+     *
+     * <p>An explicitly requested --report location is never relocated: silently writing somewhere
+     * other than where the caller asked would be worse than failing.
+     */
+    private boolean ensureWritableReportRoot() {
+        if (canWriteFilesIn(cfg.reportRoot)) {
+            return true;
+        }
+        if (cfg.reportExplicit) {
+            System.err.println("[ERROR] Cannot write files into the report directory: " + cfg.reportRoot);
+            printWriteDeniedHelp();
+            return false;
+        }
+
+        Path fallback = Paths.get(System.getProperty("java.io.tmpdir"))
+                .resolve("winmerge_report_" + sanitizeFileName(fileNameOf(cfg.root)));
+        System.err.println("[WARN] Cannot write files into " + cfg.reportRoot);
+        System.err.println("       Directories can be created there but files cannot, which usually means");
+        System.err.println("       security software is blocking this program from writing to that tree.");
+        if (!canWriteFilesIn(fallback)) {
+            System.err.println("[ERROR] The fallback location is not writable either: " + fallback);
+            printWriteDeniedHelp();
+            return false;
+        }
+        cfg.reportRoot = fallback;
+        if (!cfg.excelExplicit) {
+            cfg.excelPath = defaultExcelPath(cfg);
+        }
+        System.err.println("       Writing the reports to " + cfg.reportRoot + " instead.");
+        System.err.println("       Pass --report <dir> to choose a different location.");
+        return true;
+    }
+
+    private void printWriteDeniedHelp() {
+        System.err.println("       Either pick a writable location with --report <dir>, or allow both");
+        System.err.println("       executables to write there:");
+        System.err.println("         " + (cfg.winMerge == null ? "WinMergeU.exe" : cfg.winMerge));
+        System.err.println("         " + System.getProperty("java.home") + java.io.File.separator
+                + "bin" + java.io.File.separator + "java.exe");
+        System.err.println("       On Windows these live under Windows Security > Virus & threat protection");
+        System.err.println("       > Ransomware protection > Controlled folder access > Allowed apps.");
+    }
+
+    /**
+     * True when a file can be created in the directory. Creating the directory is not enough of a
+     * test: the failure mode this guards against allows mkdir and denies file creation.
+     */
+    private static boolean canWriteFilesIn(Path dir) {
+        Path probe = null;
+        try {
+            Files.createDirectories(dir);
+            probe = dir.resolve(".winmerge_report_write_test");
+            Files.write(probe, new byte[]{'o', 'k'});
+            return true;
+        } catch (IOException | RuntimeException e) {
+            return false;
+        } finally {
+            if (probe != null) {
+                try {
+                    Files.deleteIfExists(probe);
+                } catch (IOException ignore) {
+                    // Leaving the probe behind is harmless.
+                }
+            }
+        }
+    }
+
+    private static String fileNameOf(Path p) {
+        Path name = p.getFileName();
+        return name == null ? "root" : name.toString();
+    }
+
+    /** Reduces a directory name to something safe to append to a temp path. */
+    private static String sanitizeFileName(String name) {
+        String s = name.replaceAll("[^A-Za-z0-9._-]", "_");
+        return s.length() > 40 ? s.substring(0, 40) : s;
     }
 
     private static boolean isWindows() {
